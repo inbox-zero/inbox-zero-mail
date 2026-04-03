@@ -60,10 +60,14 @@ public struct AccountAvatar: Sendable, Equatable {
 }
 
 public struct ThreadRowView: View, Equatable {
+    private static let selectionAccessoryWidth: CGFloat = 22
+
     private let thread: MailThread
     private let accountText: String
     private let isSelected: Bool
     private let isHovered: Bool
+    private let isMultiSelectActive: Bool
+    private let isMultiSelected: Bool
     private let accountAvatar: AccountAvatar?
     private let onToggleStar: (() -> Void)?
 
@@ -71,6 +75,8 @@ public struct ThreadRowView: View, Equatable {
         lhs.thread == rhs.thread &&
         lhs.isSelected == rhs.isSelected &&
         lhs.isHovered == rhs.isHovered &&
+        lhs.isMultiSelectActive == rhs.isMultiSelectActive &&
+        lhs.isMultiSelected == rhs.isMultiSelected &&
         lhs.accountText == rhs.accountText &&
         lhs.accountAvatar == rhs.accountAvatar
     }
@@ -80,6 +86,8 @@ public struct ThreadRowView: View, Equatable {
         accountText: String,
         isSelected: Bool,
         isHovered: Bool = false,
+        isMultiSelectActive: Bool = false,
+        isMultiSelected: Bool = false,
         accountAvatar: AccountAvatar? = nil,
         onToggleStar: (() -> Void)? = nil
     ) {
@@ -87,6 +95,8 @@ public struct ThreadRowView: View, Equatable {
         self.accountText = accountText
         self.isSelected = isSelected
         self.isHovered = isHovered
+        self.isMultiSelectActive = isMultiSelectActive
+        self.isMultiSelected = isMultiSelected
         self.accountAvatar = accountAvatar
         self.onToggleStar = onToggleStar
     }
@@ -202,6 +212,16 @@ public struct ThreadRowView: View, Equatable {
                     .clipShape(Circle())
                     .padding(.leading, 8)
             }
+
+            ZStack(alignment: .trailing) {
+                if isMultiSelectActive {
+                    Image(systemName: isMultiSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(isMultiSelected ? MailDesignTokens.accent : MailDesignTokens.textTertiary)
+                }
+            }
+            .frame(width: Self.selectionAccessoryWidth)
+            .padding(.leading, 8)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)

@@ -1772,33 +1772,25 @@ private struct ThreadListPane: View {
 
                                 let isMultiSelected = model.multiSelectedIDs.contains(thread.id)
                                 let isHovered = model.hoveredThreadID == thread.id
-                                HStack(spacing: 0) {
-                                    if model.isMultiSelectActive {
-                                        Image(systemName: isMultiSelected ? "checkmark.circle.fill" : "circle")
-                                            .font(.system(size: 14))
-                                            .foregroundStyle(isMultiSelected ? MailDesignTokens.accent : MailDesignTokens.textTertiary)
-                                            .frame(width: 18)
-                                            .padding(.leading, 16)
-                                            .padding(.trailing, 8)
+                                ThreadRowView(
+                                    thread: thread,
+                                    accountText: Self.accountLabel(for: thread.accountID, in: accountMap),
+                                    isSelected: model.selectedThreadID == thread.id,
+                                    isHovered: isHovered && !model.isMultiSelectActive,
+                                    isMultiSelectActive: model.isMultiSelectActive,
+                                    isMultiSelected: isMultiSelected,
+                                    accountAvatar: Self.accountAvatar(
+                                        for: thread.accountID,
+                                        in: accountMap,
+                                        allAccounts: model.accounts,
+                                        showAvatar: showAvatar
+                                    ),
+                                    onToggleStar: model.isMultiSelectActive ? nil : {
+                                        model.hoveredThreadID = thread.id
+                                        model.toggleStarSelection()
                                     }
-                                    ThreadRowView(
-                                        thread: thread,
-                                        accountText: Self.accountLabel(for: thread.accountID, in: accountMap),
-                                        isSelected: model.selectedThreadID == thread.id,
-                                        isHovered: isHovered && !model.isMultiSelectActive,
-                                        accountAvatar: Self.accountAvatar(
-                                            for: thread.accountID,
-                                            in: accountMap,
-                                            allAccounts: model.accounts,
-                                            showAvatar: showAvatar
-                                        ),
-                                        onToggleStar: model.isMultiSelectActive ? nil : {
-                                            model.hoveredThreadID = thread.id
-                                            model.toggleStarSelection()
-                                        }
-                                    )
-                                    .equatable()
-                                }
+                                )
+                                .equatable()
                                 .contentShape(Rectangle())
                                 .background(isMultiSelected ? MailDesignTokens.selected.opacity(0.6) : Color.clear)
                                 .accessibilityElement(children: .contain)
@@ -1823,7 +1815,7 @@ private struct ThreadListPane: View {
                                 .id(thread.id)
 
                                 Divider()
-                                    .padding(.leading, model.isMultiSelectActive ? 86 : 46)
+                                    .padding(.leading, 46)
                             }
                         }
                     }
