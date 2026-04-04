@@ -79,6 +79,7 @@ final class RichComposeEditorContainer: NSView, NSTextViewDelegate {
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
+        normalizeTypingAttributes()
         refreshSelectionToolbar()
     }
 
@@ -206,6 +207,7 @@ final class RichComposeEditorContainer: NSView, NSTextViewDelegate {
         textView.backgroundColor = .clear
         textView.textColor = NSColor(MailDesignTokens.textPrimary)
         textView.insertionPointColor = NSColor(MailDesignTokens.textPrimary)
+        textView.selectedTextAttributes = Self.selectedTextAttributes()
         textView.isRichText = true
         textView.importsGraphics = false
         textView.allowsImageEditing = false
@@ -235,6 +237,8 @@ final class RichComposeEditorContainer: NSView, NSTextViewDelegate {
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+
+        normalizeTypingAttributes()
     }
 
     private func syncDraftContent() {
@@ -423,6 +427,13 @@ final class RichComposeEditorContainer: NSView, NSTextViewDelegate {
         ]
     }
 
+    private static func selectedTextAttributes() -> [NSAttributedString.Key: Any] {
+        [
+            .backgroundColor: NSColor(MailDesignTokens.accent).withAlphaComponent(0.28),
+            .foregroundColor: NSColor(MailDesignTokens.textPrimary),
+        ]
+    }
+
     private static func makeAttributedString(plainText: String, htmlText: String?) -> NSMutableAttributedString {
         if let htmlText,
            htmlText.isEmpty == false,
@@ -443,9 +454,8 @@ final class RichComposeEditorContainer: NSView, NSTextViewDelegate {
                 if attributes[.font] == nil {
                     attributed.addAttribute(.font, value: defaultFont, range: range)
                 }
-                if attributes[.foregroundColor] == nil {
-                    attributed.addAttribute(.foregroundColor, value: NSColor(MailDesignTokens.textPrimary), range: range)
-                }
+                attributed.addAttribute(.foregroundColor, value: NSColor(MailDesignTokens.textPrimary), range: range)
+                attributed.removeAttribute(.backgroundColor, range: range)
                 if attributes[.paragraphStyle] == nil {
                     attributed.addAttribute(.paragraphStyle, value: defaultParagraphStyle(), range: range)
                 }
@@ -469,6 +479,13 @@ final class RichComposeEditorContainer: NSView, NSTextViewDelegate {
             return nil
         }
         return String(data: data, encoding: .utf8)
+    }
+
+    private func normalizeTypingAttributes() {
+        var typingAttributes = textView.typingAttributes
+        typingAttributes[.foregroundColor] = NSColor(MailDesignTokens.textPrimary)
+        typingAttributes[.backgroundColor] = NSColor.clear
+        textView.typingAttributes = typingAttributes
     }
 }
 
