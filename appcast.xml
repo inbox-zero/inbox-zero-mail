@@ -12,7 +12,7 @@
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <sparkle:releaseNotesLink>https://inbox-zero.github.io/inbox-zero-mail/release-notes/Inbox%20Zero%200.1.0.md</sparkle:releaseNotesLink>
-            <enclosure url="https://github.com/inbox-zero/inbox-zero-mail/releases/download/v0.1.0/Inbox%20Zero%200.1.0.zip" length="6338107" type="application/octet-stream" sparkle:edSignature="3wO+sRbi7gmXSU2Gw27EQHqxeiG8SHJgYcKCuW8scugdGw1tS45TKf/3sOfATemxJRlvQZVohH9J8O/QAQnHCw=="/>
+            <enclosure url="https://github.com/inbox-zero/inbox-zero-mail/releases/download/v0.1.0/Inbox%20Zero%200.1.0.zip" length="6399982" type="application/octet-stream" sparkle:edSignature="omQeSeXbS7NS6EuPpdqYrj229TUW6lFKcwIr3EMNazHgThVadVZ0qpwu0vd4o4nojr8MERynyr2T/oiwa4FfBw=="/>
         </item>
     </channel>
 </rss>
