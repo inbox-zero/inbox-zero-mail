@@ -1,0 +1,18 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>InboxZeroMail</title>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Mon, 06 Apr 2026 19:25:41 +0000</pubDate>
+            <link>https://github.com/inbox-zero/inbox-zero-mail</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/inbox-zero/inbox-zero-mail/releases/tag/v0.1.0</sparkle:fullReleaseNotesLink>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <sparkle:releaseNotesLink>https://inbox-zero.github.io/inbox-zero-mail/release-notes/Inbox%20Zero%200.1.0.md</sparkle:releaseNotesLink>
+            <enclosure url="https://github.com/inbox-zero/inbox-zero-mail/releases/download/v0.1.0/Inbox%20Zero%200.1.0.zip" length="6338107" type="application/octet-stream" sparkle:edSignature="3wO+sRbi7gmXSU2Gw27EQHqxeiG8SHJgYcKCuW8scugdGw1tS45TKf/3sOfATemxJRlvQZVohH9J8O/QAQnHCw=="/>
+        </item>
+    </channel>
+</rss>
