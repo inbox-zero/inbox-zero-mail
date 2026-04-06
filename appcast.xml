@@ -3,6 +3,17 @@
     <channel>
         <title>InboxZeroMail</title>
         <item>
+            <title>0.1.2</title>
+            <pubDate>Mon, 06 Apr 2026 21:20:50 +0000</pubDate>
+            <link>https://github.com/inbox-zero/inbox-zero-mail</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/inbox-zero/inbox-zero-mail/releases/tag/v0.1.2</sparkle:fullReleaseNotesLink>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/inbox-zero/inbox-zero-mail/releases/download/v0.1.2/Inbox-Zero-0.1.2.zip" length="6404356" type="application/octet-stream" sparkle:edSignature="41O4E2oD1q7Sc54qvXGQKEmJbgM8nc08jQ9McEiKN3JH5YUhiZ3PWyX1YAXGzDSSPWOjiYFj1TkEeMc+QvA4BA=="/>
+        </item>
+        <item>
             <title>0.1.1</title>
             <pubDate>Mon, 06 Apr 2026 20:01:04 +0000</pubDate>
             <link>https://github.com/inbox-zero/inbox-zero-mail</link>
