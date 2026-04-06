@@ -66,6 +66,7 @@ public final class WindowModel {
     public var isFolderPickerPresented = false
     public var isSnoozePickerPresented = false
     public var errorMessage: String?
+    public private(set) var errorReconnectAccountID: MailAccountID?
     public var undoAction: UndoableAction?
     private var threadDetailCache: [MailThreadID: MailThreadDetail] = [:]
     private var prefetchingThreadIDs: Set<MailThreadID> = []
@@ -361,6 +362,11 @@ public final class WindowModel {
 
     public func connectGmail() {
         connectAccount(kind: .gmail)
+    }
+
+    public func reconnect(accountID: MailAccountID) {
+        dismissError()
+        store.reconnectAccount(accountID: accountID)
     }
 
     public func remove(accountID: MailAccountID) {
@@ -934,6 +940,7 @@ public final class WindowModel {
 
     public func dismissError() {
         errorMessage = nil
+        errorReconnectAccountID = nil
     }
 
     // MARK: - Computed Properties
@@ -1047,8 +1054,10 @@ public final class WindowModel {
         let message = error.localizedDescription
         if message == "The provider session is unauthorized." || String(describing: error) == "unauthorized" {
             errorMessage = "Your account session expired. Reconnect the account and try again."
+            errorReconnectAccountID = reconnectableAccountIDForCurrentContext()
             return
         }
+        errorReconnectAccountID = nil
         errorMessage = message
     }
 }
@@ -1056,6 +1065,13 @@ public final class WindowModel {
 // MARK: - Private Helpers
 
 private extension WindowModel {
+    func reconnectableAccountIDForCurrentContext() -> MailAccountID? {
+        selectedThreadAccount?.id
+            ?? focusedThreadAccount?.id
+            ?? selectedAccountID
+            ?? accounts.first(where: { $0.syncState.requiresReconnect })?.id
+    }
+
     func archive(_ thread: MailThread) {
         let mutation = MailMutation.archive(threadID: thread.id)
         let reverse = MailMutation.unarchive(threadID: thread.id)

@@ -18,6 +18,7 @@ private actor StubWorkspace: MailWorkspace {
     let threadCounts: [ThreadListQuery: Int]
     let startDelayNanoseconds: UInt64
     private var performedMutations: [MailMutation] = []
+    private var reconnectedAccountIDs: [MailAccountID] = []
     private var storedDrafts: [OutgoingDraft]
     private var sentDrafts: [OutgoingDraft] = []
     private var savedDrafts: [OutgoingDraft] = []
@@ -57,6 +58,9 @@ private actor StubWorkspace: MailWorkspace {
     }
     func setForegroundActive(_ isActive: Bool) async {}
     func connectAccount(kind: ProviderKind) async throws {}
+    func reconnectAccount(accountID: MailAccountID) async throws {
+        reconnectedAccountIDs.append(accountID)
+    }
     func listAccounts() async throws -> [MailAccount] { accounts }
     func listThreads(query: ThreadListQuery) async throws -> [MailThread] {
         threadQueryResults[query] ?? threads
@@ -107,6 +111,10 @@ private actor StubWorkspace: MailWorkspace {
 
     func recordedMutations() async -> [MailMutation] {
         performedMutations
+    }
+
+    func recordedReconnectAccountIDs() async -> [MailAccountID] {
+        reconnectedAccountIDs
     }
 
     func recordedSentDrafts() async -> [OutgoingDraft] {
@@ -266,6 +274,31 @@ func openingUnreadThreadSuppressesImplicitMarkReadErrors() async throws {
     let recorded = await workspace.recordedMutations()
     #expect(recorded == [MailMutation.markRead(threadID: thread.id)])
     #expect(model.errorMessage == nil)
+}
+
+@Test
+@MainActor
+func unauthorizedErrorReconnectsFocusedAccount() async throws {
+    let account = makeAccount()
+    let thread = makeThread(accountID: account.id)
+    let workspace = StubWorkspace(accounts: [account], threads: [thread], detail: nil)
+    let model = makeWindowModel(workspace: workspace)
+
+    await model.store.reloadSharedData(reason: .initial)
+    await model.reloadThreads()
+    model.select(accountID: account.id)
+    model.open(threadID: thread.id)
+    model.present(MailProviderError.unauthorized)
+
+    #expect(model.errorReconnectAccountID == account.id)
+
+    model.reconnect(accountID: account.id)
+    try await Task.sleep(for: .milliseconds(50))
+
+    let recordedReconnects = await workspace.recordedReconnectAccountIDs()
+    #expect(recordedReconnects == [account.id])
+    #expect(model.errorMessage == nil)
+    #expect(model.errorReconnectAccountID == nil)
 }
 
 @Test

@@ -186,6 +186,24 @@ public final class MailAppStore {
         connectAccount(kind: .gmail)
     }
 
+    public func reconnectAccount(accountID: MailAccountID) {
+        guard isConnectingAccount == false else { return }
+        isConnectingAccount = true
+        Task { [weak self] in
+            defer { self?.isConnectingAccount = false }
+            guard let self else { return }
+            do {
+                try await workspace.reconnectAccount(accountID: accountID)
+                await reloadSharedData(reason: .manual)
+            } catch {
+                if error is CancellationError { return }
+                let nsError = error as NSError
+                if nsError.domain == "org.openid.appauth.general", nsError.code == -3 { return }
+                windowModels.first(where: { $0.value != nil })?.value?.present(error)
+            }
+        }
+    }
+
     public func connectDefaultAvailableAccount() {
         guard let kind = availableAccountProviders.first else { return }
         connectAccount(kind: kind)

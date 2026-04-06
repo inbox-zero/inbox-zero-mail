@@ -72,7 +72,6 @@ public actor MailWorkspaceController: MailWorkspace {
 
         let session = try await provider.authorize()
         let accountID = MailAccountID(rawValue: "\(kind.rawValue):\(session.emailAddress.lowercased())")
-        let capabilities = capabilities(for: kind)
         let account = MailAccount(
             id: accountID,
             providerKind: kind,
@@ -80,15 +79,40 @@ public actor MailWorkspaceController: MailWorkspace {
             primaryEmail: session.emailAddress,
             displayName: session.displayName,
             syncState: .init(phase: .syncing),
-            capabilities: capabilities
+            capabilities: capabilities(for: kind)
         )
+        try await saveAuthorizedAccount(account, session: session)
+    }
 
-        try await store.saveAccount(account)
-        try credentialsStore.save(session: session, for: accountID)
-        do {
-            try await refreshAccount(accountID, rethrowFailures: true)
-        } catch {}
-        publishChange()
+    public func reconnectAccount(accountID: MailAccountID) async throws {
+        guard let existingAccount = try await store.listAccounts().first(where: { $0.id == accountID }) else {
+            throw MailProviderError.transport("Unknown account \(accountID.rawValue).")
+        }
+        guard let provider = providers[existingAccount.providerKind] else {
+            throw MailProviderError.missingConfiguration("No provider is registered for \(existingAccount.providerKind.rawValue).")
+        }
+
+        let session = try await provider.authorize()
+        let resolvedAccountID = MailAccountID(rawValue: "\(existingAccount.providerKind.rawValue):\(session.emailAddress.lowercased())")
+        guard resolvedAccountID == accountID else {
+            throw MailProviderError.transport(
+                "Signed in as \(session.emailAddress). Reconnect \(existingAccount.primaryEmail) with the same account, or add \(session.emailAddress) separately."
+            )
+        }
+
+        let updatedAccount = MailAccount(
+            id: accountID,
+            providerKind: existingAccount.providerKind,
+            providerAccountID: session.providerAccountID,
+            primaryEmail: session.emailAddress,
+            displayName: session.displayName,
+            syncState: .init(
+                phase: .syncing,
+                lastSuccessfulSyncAt: existingAccount.syncState.lastSuccessfulSyncAt
+            ),
+            capabilities: capabilities(for: existingAccount.providerKind)
+        )
+        try await saveAuthorizedAccount(updatedAccount, session: session)
     }
 
     public func listAccounts() async throws -> [MailAccount] {
@@ -605,7 +629,7 @@ private extension MailWorkspaceController {
             let syncedAccount = try await syncAccountPages(account: account, provider: provider, session: session)
             try await store.saveAccount(syncedAccount)
             try await store.evictColdBodies(maxHotThreads: 200, maxAge: 14 * 24 * 60 * 60)
-            if account.syncState.phase == .error {
+            if account.syncState.isErrorState {
                 syncLogger.notice("Sync recovered for account \(account.id.rawValue, privacy: .public)")
             }
             refreshBackoff[accountID] = 0
@@ -669,7 +693,7 @@ private extension MailWorkspaceController {
             try? await store.saveSyncState(
                 accountID: accountID,
                 .init(
-                    phase: .error,
+                    phase: .reauthRequired,
                     lastSuccessfulSyncAt: account.syncState.lastSuccessfulSyncAt,
                     lastErrorDescription: missingCredentials
                         ? "Account credentials are missing. Reconnect the account to resume sync."
@@ -716,6 +740,15 @@ private extension MailWorkspaceController {
             return true
         }
         return false
+    }
+
+    func saveAuthorizedAccount(_ account: MailAccount, session: ProviderSession) async throws {
+        try await store.saveAccount(account)
+        try credentialsStore.save(session: session, for: account.id)
+        do {
+            try await refreshAccount(account.id, rethrowFailures: true)
+        } catch {}
+        publishChange()
     }
 
     func isRetryableMutationError(_ error: Error) -> Bool {

@@ -60,6 +60,43 @@ func failedInitialConnectRollsBackSavedAccount() async throws {
 }
 
 @Test
+@MainActor
+func reconnectAccountReauthorizesExistingAccount() async throws {
+    let (store, _) = try makeStore()
+    let account = makeAccount(syncState: .init(
+        phase: .reauthRequired,
+        lastSuccessfulSyncAt: .now.addingTimeInterval(-3600),
+        lastErrorDescription: "Account authorization expired. Reconnect the account to resume sync."
+    ))
+    try await seedWorkspaceStore(store: store, account: account)
+
+    let session = makeSession(
+        for: account,
+        accessToken: "fresh-token",
+        displayName: "Alpha Reconnected"
+    )
+    let provider = TestMailProvider(
+        authorizeSession: session,
+        syncPages: [.initial: makeSyncPage(account: account, session: session, threads: [])]
+    )
+    let credentials = TestCredentialsStore()
+    let workspace = MailWorkspaceController(
+        store: store,
+        credentialsStore: credentials,
+        providers: [.gmail: provider]
+    )
+
+    try await workspace.reconnectAccount(accountID: account.id)
+
+    let refreshedAccount = try #require(try await store.listAccounts().first(where: { $0.id == account.id }))
+    #expect(refreshedAccount.primaryEmail == account.primaryEmail)
+    #expect(refreshedAccount.displayName == "Alpha Reconnected")
+    #expect(refreshedAccount.syncState.phase == .idle)
+    #expect(refreshedAccount.syncState.lastErrorDescription == nil)
+    #expect(credentials.savedAccountIDs == [account.id])
+}
+
+@Test
 func unifiedInboxSortsAcrossAccountsByLatestActivity() async throws {
     let (store, _) = try makeStore()
 
@@ -459,7 +496,7 @@ func performWithoutCredentialsPreservesAccountStateAndMarksError() async throws 
 
     let refreshedAccount = try #require(try await store.listAccounts().first(where: { $0.id == account.id }))
     let remainingThreads = try await store.listThreads(query: ThreadListQuery(tab: .all))
-    #expect(refreshedAccount.syncState.phase == .error)
+    #expect(refreshedAccount.syncState.phase == .reauthRequired)
     #expect(refreshedAccount.syncState.lastErrorDescription == "Account credentials are missing. Reconnect the account to resume sync.")
     #expect(remainingThreads.count == 1)
 
@@ -493,7 +530,7 @@ func unauthorizedProviderMutationPreservesAccountStateAndClearsCredentials() asy
 
     let refreshedAccount = try #require(try await store.listAccounts().first(where: { $0.id == account.id }))
     let remainingThreads = try await store.listThreads(query: ThreadListQuery(tab: .all))
-    #expect(refreshedAccount.syncState.phase == .error)
+    #expect(refreshedAccount.syncState.phase == .reauthRequired)
     #expect(refreshedAccount.syncState.lastErrorDescription == "Account authorization expired. Reconnect the account to resume sync.")
     #expect(remainingThreads.map(\.id) == [thread.id])
     #expect(credentials.savedAccountIDs.isEmpty)
@@ -732,7 +769,7 @@ func refreshAllPreservesAccountsWhoseProviderSessionIsUnauthorized() async throw
 
     let refreshedAccount = try #require(try await store.listAccounts().first(where: { $0.id == account.id }))
     let remainingThreads = try await store.listThreads(query: ThreadListQuery(tab: .all))
-    #expect(refreshedAccount.syncState.phase == .error)
+    #expect(refreshedAccount.syncState.phase == .reauthRequired)
     #expect(refreshedAccount.syncState.lastErrorDescription == "Account authorization expired. Reconnect the account to resume sync.")
     #expect(remainingThreads.count == 1)
     #expect(credentials.savedAccountIDs.isEmpty)
@@ -1073,24 +1110,53 @@ private func makeStore() throws -> (SQLiteMailStore, String) {
     return (try SQLiteMailStore(path: path), path)
 }
 
-private func makeAccount(email: String = "test@example.com") -> MailAccount {
+private func makeAccount(
+    email: String = "test@example.com",
+    displayName: String = "Test",
+    syncState: MailAccountSyncState = .init()
+) -> MailAccount {
     MailAccount(
         id: MailAccountID(rawValue: "gmail:\(email)"),
         providerKind: .gmail,
         providerAccountID: email,
         primaryEmail: email,
-        displayName: "Test",
+        displayName: displayName,
+        syncState: syncState,
         capabilities: .init(supportsArchive: true, supportsLabels: true, supportsCompose: true)
     )
 }
 
-private func makeSession(for account: MailAccount) -> ProviderSession {
+private func makeSession(
+    for account: MailAccount,
+    accessToken: String = "token",
+    displayName: String? = nil
+) -> ProviderSession {
     ProviderSession(
         providerKind: account.providerKind,
         providerAccountID: account.providerAccountID,
         emailAddress: account.primaryEmail,
-        displayName: account.displayName,
-        accessToken: "token"
+        displayName: displayName ?? account.displayName,
+        accessToken: accessToken
+    )
+}
+
+private func makeSyncPage(
+    account: MailAccount,
+    session: ProviderSession,
+    threads: [MailThreadDetail],
+    checkpointPayload: String? = "next-checkpoint"
+) -> MailSyncPage {
+    MailSyncPage(
+        profile: ProviderAccountProfile(
+            providerAccountID: session.providerAccountID,
+            emailAddress: session.emailAddress,
+            displayName: session.displayName
+        ),
+        mailboxes: [],
+        threadDetails: threads,
+        checkpointPayload: checkpointPayload,
+        nextPageToken: nil,
+        isBackfillComplete: true
     )
 }
 
@@ -1190,6 +1256,7 @@ private final class TestMailProvider: @unchecked Sendable, MailProvider {
 
     private let applyError: Error?
     private var applyResults: [Error?]
+    private let authorizeSession: ProviderSession?
     private let syncError: Error?
     private let saveDraftError: Error?
     private let listDraftsError: Error?
@@ -1206,6 +1273,7 @@ private final class TestMailProvider: @unchecked Sendable, MailProvider {
     init(
         applyError: Error? = nil,
         applyResults: [Error?] = [],
+        authorizeSession: ProviderSession? = nil,
         syncError: Error? = nil,
         mailboxes: [MailboxRef] = [],
         syncPages: [SyncKey: MailSyncPage] = [:],
@@ -1216,6 +1284,7 @@ private final class TestMailProvider: @unchecked Sendable, MailProvider {
     ) {
         self.applyError = applyError
         self.applyResults = applyResults
+        self.authorizeSession = authorizeSession
         self.syncError = syncError
         self.mailboxes = mailboxes
         self.syncPages = syncPages
@@ -1227,7 +1296,10 @@ private final class TestMailProvider: @unchecked Sendable, MailProvider {
 
     @MainActor
     func authorize() async throws -> ProviderSession {
-        throw MailProviderError.unsupported("Not used in tests.")
+        guard let authorizeSession else {
+            throw MailProviderError.unsupported("Not used in tests.")
+        }
+        return authorizeSession
     }
 
     @MainActor

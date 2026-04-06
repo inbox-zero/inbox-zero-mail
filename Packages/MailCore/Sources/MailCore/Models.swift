@@ -30,6 +30,7 @@ public struct MailAccountCapabilities: Codable, Hashable, Sendable {
 public enum MailAccountSyncPhase: String, Codable, Hashable, Sendable {
     case idle
     case syncing
+    case reauthRequired
     case error
 }
 
@@ -46,6 +47,14 @@ public struct MailAccountSyncState: Codable, Hashable, Sendable {
         self.phase = phase
         self.lastSuccessfulSyncAt = lastSuccessfulSyncAt
         self.lastErrorDescription = lastErrorDescription
+    }
+
+    public var requiresReconnect: Bool {
+        phase == .reauthRequired
+    }
+
+    public var isErrorState: Bool {
+        requiresReconnect || phase == .error
     }
 }
 

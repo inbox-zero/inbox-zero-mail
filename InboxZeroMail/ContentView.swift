@@ -221,6 +221,11 @@ struct ContentView: View {
             }
         }
         .alert("Error", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.dismissError() } })) {
+            if let reconnectAccountID = model.errorReconnectAccountID {
+                Button("Sign In Again") {
+                    model.reconnect(accountID: reconnectAccountID)
+                }
+            }
             Button("OK", role: .cancel) { model.dismissError() }
         } message: {
             Text(model.errorMessage ?? "")
@@ -1499,7 +1504,7 @@ private struct SidebarView: View {
                                             if account.syncState.phase == .syncing {
                                                 ProgressView()
                                                     .controlSize(.mini)
-                                            } else if account.syncState.phase == .error {
+                                            } else if account.syncState.isErrorState {
                                                 Image(systemName: "exclamationmark.circle.fill")
                                                     .font(.system(size: 10))
                                                     .foregroundStyle(.red.opacity(0.8))
@@ -1519,6 +1524,31 @@ private struct SidebarView: View {
                             // Per-account mailbox tree when this account is selected
                             if model.selectedAccountID == account.id {
                                 let accountMailboxes = model.mailboxes.filter { $0.accountID == account.id }
+
+                                if account.syncState.requiresReconnect {
+                                    SidebarRow(horizontalPadding: 12, verticalPadding: 8, cornerRadius: 8) {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            Label("Session expired", systemImage: "person.crop.circle.badge.exclamationmark")
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundStyle(MailDesignTokens.sidebarText)
+                                            Text("Cached mail stays visible. Sign in again to resume sync.")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(MailDesignTokens.sidebarMuted)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                            Button {
+                                                model.reconnect(accountID: account.id)
+                                            } label: {
+                                                Label(model.isConnectingAccount ? "Signing In..." : "Sign In Again", systemImage: "arrow.clockwise")
+                                                    .font(.system(size: 11, weight: .semibold))
+                                                    .foregroundStyle(MailDesignTokens.sidebarText)
+                                            }
+                                            .buttonStyle(.plain)
+                                            .disabled(model.isConnectingAccount)
+                                        }
+                                    }
+                                    .padding(.leading, 22)
+                                    .padding(.bottom, 4)
+                                }
 
                                 if account.providerKind == .gmail {
                                     Button {
@@ -1704,6 +1734,9 @@ private struct SidebarView: View {
     }
 
     private func syncErrorMessage(for account: MailAccount) -> String {
+        if account.syncState.requiresReconnect {
+            return "This account needs to sign in again. Cached mail stays visible until you reconnect or remove the account."
+        }
         if let description = account.syncState.lastErrorDescription?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            description.isEmpty == false {
