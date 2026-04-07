@@ -95,10 +95,25 @@ public actor SQLiteMailStore: MailStore {
     public func upsertThreadDetails(_ details: [MailThreadDetail], checkpoint: SyncCheckpoint?) async throws {
         try await dbQueue.write { db in
             for detail in details {
-                try ThreadRecord(thread: detail.thread, encoder: encoder).save(db)
-                try MessageRecord.filter(Column("threadID") == detail.thread.id.rawValue).deleteAll(db)
-                for message in detail.messages {
-                    try MessageRecord(message: message, encoder: encoder).insert(db)
+                let existingThreadDetail = try Self.loadThreadDetail(id: detail.thread.id, db: db, decoder: decoder)
+                let existingMessages = try MessageRecord
+                    .filter(Column("threadID") == detail.thread.id.rawValue)
+                    .fetchAll(db)
+                let existingByProviderID = Dictionary(uniqueKeysWithValues: existingMessages.map { ($0.providerMessageID, $0) })
+                let resolvedDetail = if detail.persistenceMode == .merge, let existingThreadDetail {
+                    detail.merged(with: existingThreadDetail)
+                } else {
+                    detail
+                }
+
+                try ThreadRecord(thread: resolvedDetail.thread, encoder: encoder).save(db)
+                try MessageRecord.filter(Column("threadID") == resolvedDetail.thread.id.rawValue).deleteAll(db)
+                for message in resolvedDetail.messages {
+                    var record = try MessageRecord(message: message, encoder: encoder)
+                    if let existing = existingByProviderID[record.providerMessageID] {
+                        record.preserveBodyCache(from: existing)
+                    }
+                    try record.insert(db)
                 }
             }
 
@@ -338,6 +353,22 @@ public actor SQLiteMailStore: MailStore {
             _ = try SyncCheckpointRecord.deleteOne(db, key: accountID.rawValue)
             _ = try QueuedMutationRecord.filter(Column("accountID") == accountID.rawValue).deleteAll(db)
         }
+    }
+}
+
+private extension SQLiteMailStore {
+    static func loadThreadDetail(id: MailThreadID, db: Database, decoder: JSONDecoder) throws -> MailThreadDetail? {
+        guard let threadRecord = try ThreadRecord.fetchOne(db, key: id.rawValue) else {
+            return nil
+        }
+
+        let messages = try MessageRecord
+            .filter(Column("threadID") == id.rawValue)
+            .order(Column("receivedAt"))
+            .fetchAll(db)
+            .map { try $0.asDomain(decoder: decoder) }
+
+        return MailThreadDetail(thread: try threadRecord.asDomain(decoder: decoder), messages: messages)
     }
 }
 
@@ -941,6 +972,21 @@ private struct MessageRecord: Codable, FetchableRecord, PersistableRecord {
             isRead: isRead,
             isOutgoing: isOutgoing
         )
+    }
+
+    mutating func preserveBodyCache(from existing: MessageRecord) {
+        if bodyCacheState == MailBodyCacheState.missing.rawValue || bodyCacheState == MailBodyCacheState.cold.rawValue {
+            if existing.plainBody != nil || existing.htmlBody != nil {
+                plainBody = existing.plainBody
+                htmlBody = existing.htmlBody
+                bodyCacheState = existing.bodyCacheState
+                touchedAt = existing.touchedAt
+            }
+        }
+
+        if attachmentsJSON == "[]", existing.attachmentsJSON != "[]" {
+            attachmentsJSON = existing.attachmentsJSON
+        }
     }
 }
 

@@ -451,13 +451,90 @@ public struct MailThread: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public enum MailThreadPersistenceMode: String, Codable, Hashable, Sendable {
+    case replace
+    case merge
+}
+
 public struct MailThreadDetail: Codable, Hashable, Sendable {
     public var thread: MailThread
     public var messages: [MailMessage]
+    public var persistenceMode: MailThreadPersistenceMode
 
-    public init(thread: MailThread, messages: [MailMessage]) {
+    public init(
+        thread: MailThread,
+        messages: [MailMessage],
+        persistenceMode: MailThreadPersistenceMode = .replace
+    ) {
         self.thread = thread
         self.messages = messages
+        self.persistenceMode = persistenceMode
+    }
+}
+
+public extension MailThreadDetail {
+    func merged(with existing: MailThreadDetail) -> MailThreadDetail {
+        var mergedByProviderMessageID = Dictionary(
+            uniqueKeysWithValues: existing.messages.map { ($0.providerMessageID, $0) }
+        )
+        for message in messages {
+            mergedByProviderMessageID[message.providerMessageID] = message
+        }
+
+        let mergedMessages = mergedByProviderMessageID.values.sorted(by: Self.messageSort)
+        let newestMessage = mergedMessages.max(by: Self.messageSort)
+        let mergedMailboxRefs = Self.uniqueMailboxes(from: mergedMessages)
+        let subject = newestMessage?.headers.first(where: { $0.name.caseInsensitiveCompare("Subject") == .orderedSame })?.value
+            ?? (thread.subject.isEmpty ? existing.thread.subject : thread.subject)
+        let senderNames = Array(NSOrderedSet(array: mergedMessages.map(\.sender.displayName))) as? [String] ?? []
+        let participantSummary = senderNames.prefix(2).joined(separator: ", ")
+        let snippet = newestMessage?.snippet.isEmpty == false
+            ? newestMessage?.snippet ?? ""
+            : (thread.snippet.isEmpty == false ? thread.snippet : existing.thread.snippet)
+        let lastActivityAt = newestMessage.map(Self.messageTimestamp)
+            ?? thread.lastActivityAt
+        let hasUnread = mergedMessages.contains(where: { !$0.isRead })
+        let isStarred = mergedMessages.contains { $0.mailboxRefs.contains(where: { $0.systemRole == .starred }) }
+            || thread.isStarred
+        let isInInbox = mergedMessages.contains { $0.mailboxRefs.contains(where: { $0.systemRole == .inbox }) }
+            || thread.isInInbox
+        let mailboxRefs = mergedMailboxRefs.isEmpty ? (thread.mailboxRefs.isEmpty ? existing.thread.mailboxRefs : thread.mailboxRefs) : mergedMailboxRefs
+        let latestMessageID = newestMessage?.id ?? thread.latestMessageID ?? existing.thread.latestMessageID
+        let attachmentCount = mergedMessages.reduce(0) { $0 + $1.attachments.count }
+
+        return MailThreadDetail(
+            thread: MailThread(
+                id: thread.id,
+                accountID: thread.accountID,
+                providerThreadID: thread.providerThreadID,
+                subject: subject,
+                participantSummary: participantSummary.isEmpty ? (thread.participantSummary.isEmpty ? existing.thread.participantSummary : thread.participantSummary) : participantSummary,
+                snippet: snippet,
+                lastActivityAt: lastActivityAt,
+                hasUnread: hasUnread,
+                isStarred: isStarred,
+                isInInbox: isInInbox,
+                mailboxRefs: mailboxRefs,
+                latestMessageID: latestMessageID,
+                attachmentCount: attachmentCount == 0 ? max(thread.attachmentCount, existing.thread.attachmentCount) : attachmentCount,
+                snoozedUntil: thread.snoozedUntil ?? existing.thread.snoozedUntil,
+                syncRevision: thread.syncRevision
+            ),
+            messages: mergedMessages,
+            persistenceMode: .replace
+        )
+    }
+
+    private static func messageSort(lhs: MailMessage, rhs: MailMessage) -> Bool {
+        messageTimestamp(lhs) < messageTimestamp(rhs)
+    }
+
+    private static func messageTimestamp(_ message: MailMessage) -> Date {
+        message.receivedAt ?? message.sentAt ?? .distantPast
+    }
+
+    private static func uniqueMailboxes(from messages: [MailMessage]) -> [MailboxRef] {
+        Array(Set(messages.flatMap(\.mailboxRefs))).sorted { $0.displayName < $1.displayName }
     }
 }
 

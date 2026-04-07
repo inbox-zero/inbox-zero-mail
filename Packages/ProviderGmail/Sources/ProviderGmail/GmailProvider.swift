@@ -3,6 +3,11 @@ import Foundation
 import MailCore
 import ProviderCore
 
+enum GmailThreadFetchMode: Sendable, Equatable {
+    case full
+    case metadata
+}
+
 public struct GmailProviderConfiguration: Sendable {
     public var environment: ProviderEnvironment
     public var clientID: String
@@ -67,6 +72,7 @@ public final class GmailProvider: NSObject, @unchecked Sendable, MailProvider {
 
     private let configuration: GmailProviderConfiguration
     private let httpClient: HTTPClient
+    private let syncMetadataCache = GmailSyncMetadataCache()
 
     public init(
         configuration: GmailProviderConfiguration,
@@ -197,11 +203,11 @@ public final class GmailProvider: NSObject, @unchecked Sendable, MailProvider {
     }
 
     public func syncPage(session: ProviderSession, accountID: MailAccountID, request: MailSyncRequest) async throws -> MailSyncPage {
-        let profile = try await fetchProfile(accessToken: session.accessToken, fallbackEmail: session.emailAddress)
-        let mailboxes = try await listMailboxes(session: session, accountID: accountID)
+        let profile = try await cachedProfile(session: session, accountID: accountID)
+        let mailboxes = try await cachedMailboxes(session: session, accountID: accountID)
         let mailboxLookup = Dictionary(uniqueKeysWithValues: mailboxes.map { ($0.providerMailboxID, $0) })
 
-        let threadIDs: [String]
+        let threadFetchPlans: [String: GmailHistoryThreadFetchPlan]
         let nextPageToken: String?
         let checkpointPayload: String?
         let isBackfillComplete: Bool
@@ -209,13 +215,13 @@ public final class GmailProvider: NSObject, @unchecked Sendable, MailProvider {
         switch request.mode {
         case .initial:
             let response = try await listThreads(accessToken: session.accessToken, labelIDs: ["INBOX"], pageToken: nil, maxResults: request.limit)
-            threadIDs = response.threads?.map(\.id) ?? []
+            threadFetchPlans = Dictionary(uniqueKeysWithValues: (response.threads?.map(\.id) ?? []).map { ($0, .full) })
             nextPageToken = response.nextPageToken
             checkpointPayload = normalizedHistoryID(response.historyId)
             isBackfillComplete = response.nextPageToken == nil
         case let .backfill(pageToken):
             let response = try await listThreads(accessToken: session.accessToken, labelIDs: ["INBOX"], pageToken: pageToken, maxResults: request.limit)
-            threadIDs = response.threads?.map(\.id) ?? []
+            threadFetchPlans = Dictionary(uniqueKeysWithValues: (response.threads?.map(\.id) ?? []).map { ($0, .full) })
             nextPageToken = response.nextPageToken
             checkpointPayload = normalizedHistoryID(response.historyId)
             isBackfillComplete = response.nextPageToken == nil
@@ -229,11 +235,13 @@ public final class GmailProvider: NSObject, @unchecked Sendable, MailProvider {
                 pageToken: pageToken,
                 maxResults: request.limit
             )
-            threadIDs = Array(Set(response.history.flatMap(\.threadIDs))).sorted()
+            threadFetchPlans = response.threadFetchPlans
             nextPageToken = response.nextPageToken
             checkpointPayload = normalizedHistoryID(response.historyID)
             isBackfillComplete = response.nextPageToken == nil
         }
+
+        let threadIDs = threadFetchPlans.keys.sorted()
 
         let maxConcurrency = 5
         let threadDetails = try await withThrowingTaskGroup(of: MailThreadDetail.self) { group in
@@ -244,7 +252,15 @@ public final class GmailProvider: NSObject, @unchecked Sendable, MailProvider {
             while index < min(maxConcurrency, threadIDs.count) {
                 let threadID = threadIDs[index]
                 group.addTask { [self] in
-                    try await fetchThread(session: session, accountID: accountID, providerThreadID: threadID, mailboxLookup: mailboxLookup, primaryEmail: profile.emailAddress)
+                    try await fetchThreadDetail(
+                        session: session,
+                        accountID: accountID,
+                        providerThreadID: threadID,
+                        mailboxLookup: mailboxLookup,
+                        primaryEmail: profile.emailAddress,
+                        fetchPlan: threadFetchPlans[threadID] ?? .full,
+                        checkpointPayload: checkpointPayload
+                    )
                 }
                 index += 1
             }
@@ -255,7 +271,15 @@ public final class GmailProvider: NSObject, @unchecked Sendable, MailProvider {
                 if index < threadIDs.count {
                     let threadID = threadIDs[index]
                     group.addTask { [self] in
-                        try await fetchThread(session: session, accountID: accountID, providerThreadID: threadID, mailboxLookup: mailboxLookup, primaryEmail: profile.emailAddress)
+                        try await fetchThreadDetail(
+                            session: session,
+                            accountID: accountID,
+                            providerThreadID: threadID,
+                            mailboxLookup: mailboxLookup,
+                            primaryEmail: profile.emailAddress,
+                            fetchPlan: threadFetchPlans[threadID] ?? .full,
+                            checkpointPayload: checkpointPayload
+                        )
                     }
                     index += 1
                 }
@@ -275,9 +299,9 @@ public final class GmailProvider: NSObject, @unchecked Sendable, MailProvider {
     }
 
     public func fetchThread(session: ProviderSession, accountID: MailAccountID, providerThreadID: String) async throws -> MailThreadDetail {
-        let mailboxes = try await listMailboxes(session: session, accountID: accountID)
+        let mailboxes = try await cachedMailboxes(session: session, accountID: accountID)
         let lookup = Dictionary(uniqueKeysWithValues: mailboxes.map { ($0.providerMailboxID, $0) })
-        let profile = try await fetchProfile(accessToken: session.accessToken, fallbackEmail: session.emailAddress)
+        let profile = try await cachedProfile(session: session, accountID: accountID)
         return try await fetchThread(
             session: session,
             accountID: accountID,
@@ -618,7 +642,17 @@ private extension GmailProvider {
         var items = [
             URLQueryItem(name: "startHistoryId", value: startHistoryID),
             URLQueryItem(name: "maxResults", value: String(maxResults)),
+            URLQueryItem(
+                name: "fields",
+                value: "history(id,messagesAdded(message(id,threadId)),messagesDeleted(message(id,threadId)),labelsAdded(message(id,threadId),labelIds),labelsRemoved(message(id,threadId),labelIds)),historyId,nextPageToken"
+            ),
         ]
+        items.append(contentsOf: [
+            URLQueryItem(name: "historyTypes", value: "messageAdded"),
+            URLQueryItem(name: "historyTypes", value: "messageDeleted"),
+            URLQueryItem(name: "historyTypes", value: "labelAdded"),
+            URLQueryItem(name: "historyTypes", value: "labelRemoved"),
+        ])
         if let pageToken {
             items.append(URLQueryItem(name: "pageToken", value: pageToken))
         }
@@ -642,18 +676,108 @@ private extension GmailProvider {
         accountID: MailAccountID,
         providerThreadID: String,
         mailboxLookup: [String: MailboxRef],
-        primaryEmail: String
+        primaryEmail: String,
+        fetchMode: GmailThreadFetchMode = .full
     ) async throws -> MailThreadDetail {
         var components = URLComponents(url: environment.apiBaseURL.appending(path: "/gmail/v1/users/me/threads/\(providerThreadID)"), resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "format", value: "full"),
-        ]
+        var queryItems = [URLQueryItem(name: "format", value: fetchMode == .full ? "full" : "metadata")]
+        if fetchMode == .metadata {
+            queryItems.append(contentsOf: [
+                URLQueryItem(
+                    name: "fields",
+                    value: "id,snippet,historyId,messages(id,threadId,labelIds,snippet,internalDate,payload(headers))"
+                ),
+                URLQueryItem(name: "metadataHeaders", value: "Subject"),
+                URLQueryItem(name: "metadataHeaders", value: "From"),
+                URLQueryItem(name: "metadataHeaders", value: "To"),
+                URLQueryItem(name: "metadataHeaders", value: "Cc"),
+                URLQueryItem(name: "metadataHeaders", value: "Bcc"),
+                URLQueryItem(name: "metadataHeaders", value: "Date"),
+            ])
+        }
+        components?.queryItems = queryItems
 
         var request = URLRequest(url: try requireURL(from: components))
         request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
 
         let response = try await httpClient.decode(GmailThreadResponse.self, from: request)
         return response.asThreadDetail(accountID: accountID, mailboxLookup: mailboxLookup, primaryEmail: primaryEmail)
+    }
+
+    func fetchThreadDetail(
+        session: ProviderSession,
+        accountID: MailAccountID,
+        providerThreadID: String,
+        mailboxLookup: [String: MailboxRef],
+        primaryEmail: String,
+        fetchPlan: GmailHistoryThreadFetchPlan,
+        checkpointPayload: String?
+    ) async throws -> MailThreadDetail {
+        switch fetchPlan {
+        case .full:
+            return try await fetchThread(
+                session: session,
+                accountID: accountID,
+                providerThreadID: providerThreadID,
+                mailboxLookup: mailboxLookup,
+                primaryEmail: primaryEmail,
+                fetchMode: .full
+            )
+        case .metadata:
+            return try await fetchThread(
+                session: session,
+                accountID: accountID,
+                providerThreadID: providerThreadID,
+                mailboxLookup: mailboxLookup,
+                primaryEmail: primaryEmail,
+                fetchMode: .metadata
+            )
+        case let .incrementalMessageIDs(messageIDs):
+            let threadID = MailThreadID(accountID: accountID, providerThreadID: providerThreadID)
+            let messages = try await withThrowingTaskGroup(of: MailMessage.self) { group in
+                for messageID in messageIDs {
+                    group.addTask { [self] in
+                        let response = try await fetchMessage(
+                            accessToken: session.accessToken,
+                            providerMessageID: messageID,
+                            format: "full",
+                            fields: "id,threadId,historyId,labelIds,snippet,internalDate,payload"
+                        )
+                        return response.asMailMessage(
+                            accountID: accountID,
+                            threadID: threadID,
+                            mailboxLookup: mailboxLookup,
+                            primaryEmail: primaryEmail
+                        )
+                    }
+                }
+
+                var results: [MailMessage] = []
+                for try await message in group {
+                    results.append(message)
+                }
+                return results.sorted { ($0.receivedAt ?? $0.sentAt ?? .distantPast) < ($1.receivedAt ?? $1.sentAt ?? .distantPast) }
+            }
+
+            return incrementalThreadDetail(
+                accountID: accountID,
+                providerThreadID: providerThreadID,
+                messages: messages,
+                syncRevision: checkpointPayload ?? messages.compactMap(\.providerMessageID).last ?? providerThreadID
+            )
+        }
+    }
+
+    func fetchMessage(accessToken: String, providerMessageID: String, format: String, fields: String? = nil) async throws -> GmailMessage {
+        var components = URLComponents(url: environment.apiBaseURL.appending(path: "/gmail/v1/users/me/messages/\(providerMessageID)"), resolvingAgainstBaseURL: false)
+        var queryItems = [URLQueryItem(name: "format", value: format)]
+        if let fields {
+            queryItems.append(URLQueryItem(name: "fields", value: fields))
+        }
+        components?.queryItems = queryItems
+        var request = URLRequest(url: try requireURL(from: components))
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        return try await httpClient.decode(GmailMessage.self, from: request)
     }
 
     func fetchLabel(accessToken: String, labelID: String) async throws -> GmailLabel {
@@ -757,6 +881,66 @@ private extension GmailProvider {
         return url
     }
 
+    func cachedProfile(session: ProviderSession, accountID: MailAccountID) async throws -> ProviderAccountProfile {
+        if let cached = await syncMetadataCache.profile(accountID: accountID, accessToken: session.accessToken) {
+            return cached
+        }
+
+        let profile = try await fetchProfile(accessToken: session.accessToken, fallbackEmail: session.emailAddress)
+        await syncMetadataCache.saveProfile(profile, accountID: accountID, accessToken: session.accessToken)
+        return profile
+    }
+
+    func cachedMailboxes(session: ProviderSession, accountID: MailAccountID) async throws -> [MailboxRef] {
+        if let cached = await syncMetadataCache.mailboxes(accountID: accountID, accessToken: session.accessToken) {
+            return cached
+        }
+
+        let mailboxes = try await listMailboxes(session: session, accountID: accountID)
+        await syncMetadataCache.saveMailboxes(mailboxes, accountID: accountID, accessToken: session.accessToken)
+        return mailboxes
+    }
+
+    func incrementalThreadDetail(
+        accountID: MailAccountID,
+        providerThreadID: String,
+        messages: [MailMessage],
+        syncRevision: String
+    ) -> MailThreadDetail {
+        let threadID = MailThreadID(accountID: accountID, providerThreadID: providerThreadID)
+        let newestMessage = messages.max(by: { ($0.receivedAt ?? $0.sentAt ?? .distantPast) < ($1.receivedAt ?? $1.sentAt ?? .distantPast) })
+        let senderNames = Array(NSOrderedSet(array: messages.map(\.sender.displayName))) as? [String] ?? []
+        let participantSummary = senderNames.prefix(2).joined(separator: ", ")
+        let threadMailboxRefs = Array(Set(messages.flatMap(\.mailboxRefs))).sorted { $0.displayName < $1.displayName }
+        let subject = newestMessage?.headers.first(where: { $0.name.caseInsensitiveCompare("Subject") == .orderedSame })?.value ?? "(No subject)"
+        let snippet = newestMessage?.snippet ?? ""
+        let lastActivityAt = newestMessage?.receivedAt ?? newestMessage?.sentAt ?? .distantPast
+        let hasUnread = messages.contains(where: { !$0.isRead })
+        let isStarred = messages.contains { $0.mailboxRefs.contains(where: { $0.systemRole == .starred }) }
+        let isInInbox = messages.contains { $0.mailboxRefs.contains(where: { $0.systemRole == .inbox }) }
+
+        return MailThreadDetail(
+            thread: MailThread(
+                id: threadID,
+                accountID: accountID,
+                providerThreadID: providerThreadID,
+                subject: subject,
+                participantSummary: participantSummary.isEmpty ? newestMessage?.sender.displayName ?? "" : participantSummary,
+                snippet: snippet,
+                lastActivityAt: lastActivityAt,
+                hasUnread: hasUnread,
+                isStarred: isStarred,
+                isInInbox: isInInbox,
+                mailboxRefs: threadMailboxRefs,
+                latestMessageID: newestMessage?.id,
+                attachmentCount: messages.reduce(0) { $0 + $1.attachments.count },
+                syncRevision: syncRevision
+            ),
+            messages: messages,
+            persistenceMode: .merge
+        )
+    }
+
     func normalizedHistoryID(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), value.isEmpty == false else {
             return nil
@@ -765,5 +949,54 @@ private extension GmailProvider {
             return nil
         }
         return value
+    }
+}
+
+private actor GmailSyncMetadataCache {
+    private struct Entry<Value: Sendable>: Sendable {
+        let accessToken: String
+        let value: Value
+        let expiresAt: Date
+    }
+
+    private var profiles: [String: Entry<ProviderAccountProfile>] = [:]
+    private var mailboxes: [String: Entry<[MailboxRef]>] = [:]
+
+    func profile(accountID: MailAccountID, accessToken: String, now: Date = Date()) -> ProviderAccountProfile? {
+        let key = accountID.rawValue
+        guard let entry = profiles[key],
+              entry.accessToken == accessToken,
+              entry.expiresAt > now else {
+            profiles[key] = nil
+            return nil
+        }
+        return entry.value
+    }
+
+    func saveProfile(_ profile: ProviderAccountProfile, accountID: MailAccountID, accessToken: String, now: Date = Date()) {
+        profiles[accountID.rawValue] = Entry(
+            accessToken: accessToken,
+            value: profile,
+            expiresAt: now.addingTimeInterval(60 * 60)
+        )
+    }
+
+    func mailboxes(accountID: MailAccountID, accessToken: String, now: Date = Date()) -> [MailboxRef]? {
+        let key = accountID.rawValue
+        guard let entry = mailboxes[key],
+              entry.accessToken == accessToken,
+              entry.expiresAt > now else {
+            mailboxes[key] = nil
+            return nil
+        }
+        return entry.value
+    }
+
+    func saveMailboxes(_ mailboxes: [MailboxRef], accountID: MailAccountID, accessToken: String, now: Date = Date()) {
+        self.mailboxes[accountID.rawValue] = Entry(
+            accessToken: accessToken,
+            value: mailboxes,
+            expiresAt: now.addingTimeInterval(10 * 60)
+        )
     }
 }

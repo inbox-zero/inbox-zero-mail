@@ -2,6 +2,12 @@ import Foundation
 import MailCore
 import ProviderCore
 
+enum GmailHistoryThreadFetchPlan: Sendable, Hashable {
+    case full
+    case metadata
+    case incrementalMessageIDs([String])
+}
+
 struct GmailProfileResponse: Decodable {
     let emailAddress: String
     let historyId: String?
@@ -61,21 +67,55 @@ struct GmailHistoryResponse: Decodable {
             let message: GmailHistoryMessage?
         }
 
+        struct LabelChange: Decodable {
+            let message: GmailHistoryMessage?
+            let labelIds: [String]?
+        }
+
         struct GmailHistoryMessage: Decodable {
             let id: String?
             let threadId: String?
         }
 
         let messagesAdded: [ChangedMessage]?
-        let labelsAdded: [ChangedMessage]?
-        let labelsRemoved: [ChangedMessage]?
+        let messagesDeleted: [ChangedMessage]?
+        let labelsAdded: [LabelChange]?
+        let labelsRemoved: [LabelChange]?
 
         var threadIDs: [String] {
-            let all = [messagesAdded, labelsAdded, labelsRemoved]
-                .compactMap { $0 }
-                .flatMap { $0 }
-                .compactMap { $0.message?.threadId }
+            let full = (messagesAdded ?? []).compactMap { $0.message?.threadId }
+            let deleted = (messagesDeleted ?? []).compactMap { $0.message?.threadId }
+            let addedLabels = (labelsAdded ?? []).compactMap { $0.message?.threadId }
+            let removedLabels = (labelsRemoved ?? []).compactMap { $0.message?.threadId }
+            let all = full + deleted + addedLabels + removedLabels
             return Array(Set(all))
+        }
+
+        var threadFetchPlans: [String: GmailHistoryThreadFetchPlan] {
+            let addedByThread = Dictionary(grouping: messagesAdded ?? [], by: { $0.message?.threadId ?? "" })
+            let deletedThreads = Set((messagesDeleted ?? []).compactMap { $0.message?.threadId })
+            let labelChangesByThread = Dictionary(
+                grouping: (labelsAdded ?? []) + (labelsRemoved ?? []),
+                by: { $0.message?.threadId ?? "" }
+            )
+            let threadIDs = Set(threadIDs)
+
+            return threadIDs.reduce(into: [:]) { plans, threadID in
+                let addedMessageIDs = Set(addedByThread[threadID, default: []].compactMap { $0.message?.id })
+                let changedLabelMessageIDs = Set(labelChangesByThread[threadID, default: []].compactMap { $0.message?.id })
+
+                if deletedThreads.contains(threadID) {
+                    plans[threadID] = .full
+                } else if addedMessageIDs.isEmpty == false {
+                    if changedLabelMessageIDs.subtracting(addedMessageIDs).isEmpty {
+                        plans[threadID] = .incrementalMessageIDs(Array(addedMessageIDs).sorted())
+                    } else {
+                        plans[threadID] = .full
+                    }
+                } else {
+                    plans[threadID] = .metadata
+                }
+            }
         }
     }
 
@@ -86,10 +126,32 @@ struct GmailHistoryResponse: Decodable {
 
 extension GmailHistoryResponse {
     var historyID: String? { historyId }
+
+    var threadFetchPlans: [String: GmailHistoryThreadFetchPlan] {
+        history.reduce(into: [:]) { plans, entry in
+            for (threadID, plan) in entry.threadFetchPlans {
+                if plans[threadID] == .full {
+                    continue
+                }
+                if case .full = plan {
+                    plans[threadID] = .full
+                } else if case let .incrementalMessageIDs(messageIDs) = plan {
+                    if case let .incrementalMessageIDs(existingIDs) = plans[threadID] {
+                        plans[threadID] = .incrementalMessageIDs(Array(Set(existingIDs).union(messageIDs)).sorted())
+                    } else {
+                        plans[threadID] = .incrementalMessageIDs(messageIDs)
+                    }
+                } else if plans[threadID] == nil {
+                    plans[threadID] = .metadata
+                }
+            }
+        }
+    }
 }
 
 struct GmailThreadResponse: Decodable {
     let id: String
+    let snippet: String?
     let historyId: String?
     let messages: [GmailMessage]
 
@@ -103,7 +165,7 @@ struct GmailThreadResponse: Decodable {
         let subject = newestMessage?.headers.first(where: { $0.name.caseInsensitiveCompare("Subject") == .orderedSame })?.value ?? "(No subject)"
         let senderNames = Array(NSOrderedSet(array: mappedMessages.map(\.sender.displayName))) as? [String] ?? []
         let participantSummary = senderNames.prefix(2).joined(separator: ", ")
-        let snippet = mappedMessages.last?.snippet ?? ""
+        let snippet = mappedMessages.last?.snippet.isEmpty == false ? mappedMessages.last?.snippet ?? "" : (self.snippet ?? "")
         let lastActivityAt = newestMessage?.receivedAt ?? newestMessage?.sentAt ?? .distantPast
         let hasUnread = mappedMessages.contains(where: { !$0.isRead })
         let isStarred = mappedMessages.contains { $0.mailboxRefs.contains(where: { $0.systemRole == .starred }) }
@@ -158,8 +220,9 @@ struct GmailMessage: Decodable {
 
     let id: String
     let threadId: String
+    let historyId: String?
     let labelIds: [String]?
-    let snippet: String
+    let snippet: String?
     let internalDate: String?
     let payload: Payload
 }
@@ -191,7 +254,7 @@ extension GmailMessage {
             bccRecipients: bcc,
             sentAt: MailDateParser.messageDate(from: headerLookup["date"]),
             receivedAt: receivedAt,
-            snippet: snippet,
+            snippet: snippet ?? "",
             plainBody: bodies.plain,
             htmlBody: bodies.html,
             bodyCacheState: bodies.plain == nil && bodies.html == nil ? .missing : .hot,

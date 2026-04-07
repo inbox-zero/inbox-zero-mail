@@ -20,6 +20,7 @@ public actor MailWorkspaceController: MailWorkspace {
     private var queuedMutationWakeupTask: Task<Void, Never>?
     private var isProcessingQueuedMutations = false
     private var scheduledRefreshTasks: [MailAccountID: Task<Void, Never>] = [:]
+    private var inFlightRefreshes: [MailAccountID: Task<Void, Error>] = [:]
 
     public init(
         store: MailStore,
@@ -163,10 +164,26 @@ public actor MailWorkspaceController: MailWorkspace {
     public func refreshAll() async {
         await processQueuedMutationsIfNeeded()
         let accounts = (try? await store.listAccounts()) ?? []
+
+        let maxConcurrentAccounts = 2
         await withTaskGroup(of: Void.self) { group in
-            for account in accounts {
+            var index = 0
+
+            while index < min(maxConcurrentAccounts, accounts.count) {
+                let account = accounts[index]
                 group.addTask { [weak self] in
                     try? await self?.refreshAccount(account.id)
+                }
+                index += 1
+            }
+
+            for await _ in group {
+                if index < accounts.count {
+                    let account = accounts[index]
+                    group.addTask { [weak self] in
+                        try? await self?.refreshAccount(account.id)
+                    }
+                    index += 1
                 }
             }
         }
@@ -584,6 +601,31 @@ private extension MailWorkspaceController {
     }
 
     func refreshAccount(_ accountID: MailAccountID, rethrowFailures: Bool = false) async throws {
+        if let existing = inFlightRefreshes[accountID] {
+            do {
+                try await existing.value
+            } catch {
+                if rethrowFailures {
+                    throw error
+                }
+            }
+            return
+        }
+
+        let task = Task { try await self.performRefreshAccount(accountID) }
+        inFlightRefreshes[accountID] = task
+        defer { inFlightRefreshes[accountID] = nil }
+
+        do {
+            try await task.value
+        } catch {
+            if rethrowFailures {
+                throw error
+            }
+        }
+    }
+
+    func performRefreshAccount(_ accountID: MailAccountID) async throws {
         let now = Date()
         if let nextEligible = nextEligibleRefresh[accountID], nextEligible > now {
             return
@@ -601,10 +643,7 @@ private extension MailWorkspaceController {
         }
         guard var session = try credentialsStore.load(accountID: accountID) else {
             await markAuthorizationFailure(accountID, missingCredentials: true)
-            if rethrowFailures {
-                throw MailProviderError.unauthorized
-            }
-            return
+            throw MailProviderError.unauthorized
         }
 
         do {
@@ -619,8 +658,7 @@ private extension MailWorkspaceController {
             } else {
                 await saveSyncFailure(accountID: accountID, lastSuccessfulSyncAt: account.syncState.lastSuccessfulSyncAt, error: error)
             }
-            if rethrowFailures { throw error }
-            return
+            throw error
         }
 
         try await store.saveSyncState(accountID: accountID, .init(phase: .syncing, lastSuccessfulSyncAt: account.syncState.lastSuccessfulSyncAt))
@@ -637,10 +675,7 @@ private extension MailWorkspaceController {
         } catch {
             if isUnauthorized(error) {
                 await markAuthorizationFailure(accountID)
-                if rethrowFailures {
-                    throw error
-                }
-                return
+                throw error
             }
             if isRetryableMutationError(error) {
                 let nextIndex = min((refreshBackoff[accountID] ?? 0) + 1, 5)
@@ -652,10 +687,7 @@ private extension MailWorkspaceController {
                     accountID: accountID,
                     .init(phase: .idle, lastSuccessfulSyncAt: account.syncState.lastSuccessfulSyncAt)
                 )
-                if rethrowFailures {
-                    throw error
-                }
-                return
+                throw error
             }
             let nextIndex = min((refreshBackoff[accountID] ?? 0) + 1, 5)
             refreshBackoff[accountID] = nextIndex
@@ -670,9 +702,7 @@ private extension MailWorkspaceController {
                     lastErrorDescription: String(describing: error)
                 )
             )
-            if rethrowFailures {
-                throw error
-            }
+            throw error
         }
 
         // Refresh label visibility separately (individual API calls, done after sync to avoid rate limits).
@@ -805,7 +835,7 @@ private extension MailWorkspaceController {
         session: ProviderSession,
         syncedAt: Date
     ) async throws -> MailAccount {
-        var request = MailSyncRequest(mode: .initial, limit: 50)
+        var request = MailSyncRequest(mode: .initial, limit: 100)
         var latestPage: MailSyncPage?
         var latestCheckpointPayload: String?
 
@@ -840,7 +870,7 @@ private extension MailWorkspaceController {
         checkpointPayload: String,
         syncedAt: Date
     ) async throws -> MailAccount {
-        var request = MailSyncRequest(mode: .delta(checkpointPayload: checkpointPayload, pageToken: nil), limit: 50)
+        var request = MailSyncRequest(mode: .delta(checkpointPayload: checkpointPayload, pageToken: nil), limit: 100)
         var latestPage: MailSyncPage?
         var latestCheckpointPayload = checkpointPayload
 

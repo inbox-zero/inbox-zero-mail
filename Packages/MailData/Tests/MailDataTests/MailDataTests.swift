@@ -600,7 +600,7 @@ func rateLimitedProviderMutationStaysOptimisticAndQueuesRetry() async throws {
     #expect(allMailThreads.first?.isInInbox == false)
 
     let dbQueue = try DatabaseQueue(path: path)
-    let queueRow = try await dbQueue.read { db in
+    let queueRow = try dbQueue.read { db in
         return try Row.fetchOne(db, sql: "SELECT retryCount, status, lastErrorDescription FROM queuedMutations")
     }
     #expect(queueRow?["retryCount"] as Int? == 1)
@@ -981,6 +981,180 @@ func foregroundActivationTriggersImmediateRefresh() async throws {
 
     let threads = try await store.listThreads(query: ThreadListQuery(tab: .all))
     #expect(threads.contains(where: { $0.providerThreadID == "reactivated" }))
+}
+
+@Test
+func overlappingRefreshesForTheSameAccountCollapseIntoOneSync() async throws {
+    let (store, _) = try makeStore()
+    let account = makeAccount()
+    try await store.saveAccount(account)
+
+    let inbox = MailboxRef(
+        id: MailboxID(accountID: account.id, providerMailboxID: "INBOX"),
+        accountID: account.id,
+        providerMailboxID: "INBOX",
+        displayName: "Inbox",
+        kind: .system,
+        systemRole: .inbox
+    )
+    let page = MailSyncPage(
+        profile: .init(
+            providerAccountID: account.providerAccountID,
+            emailAddress: account.primaryEmail,
+            displayName: account.displayName
+        ),
+        mailboxes: [inbox],
+        threadDetails: [makeThreadDetail(account: account, providerThreadID: "deduped", subject: "Only once", mailboxRefs: [inbox])],
+        checkpointPayload: "4001",
+        nextPageToken: nil,
+        isBackfillComplete: true
+    )
+    let provider = BlockingSyncProvider(page: page)
+    let credentials = TestCredentialsStore()
+    try credentials.save(session: makeSession(for: account), for: account.id)
+    let controller = MailWorkspaceController(
+        store: store,
+        credentialsStore: credentials,
+        providers: [.gmail: provider]
+    )
+
+    async let first: Void = controller.refreshAll()
+    async let second: Void = controller.refreshAll()
+    _ = await (first, second)
+
+    #expect(await provider.syncCallCount() == 1)
+}
+
+@Test
+func metadataOnlyUpdatesPreserveCachedBodiesAndAttachments() async throws {
+    let (store, _) = try makeStore()
+    let account = makeAccount()
+
+    let inbox = MailboxRef(
+        id: MailboxID(accountID: account.id, providerMailboxID: "INBOX"),
+        accountID: account.id,
+        providerMailboxID: "INBOX",
+        displayName: "Inbox",
+        kind: .system,
+        systemRole: .inbox
+    )
+    let starred = MailboxRef(
+        id: MailboxID(accountID: account.id, providerMailboxID: "STARRED"),
+        accountID: account.id,
+        providerMailboxID: "STARRED",
+        displayName: "Starred",
+        kind: .system,
+        systemRole: .starred
+    )
+    let threadID = MailThreadID(accountID: account.id, providerThreadID: "thread-1")
+    let messageID = MailMessageID(accountID: account.id, providerMessageID: "message-thread-1")
+    let hotAttachment = MailAttachment(
+        id: "attachment-1",
+        messageID: messageID,
+        filename: "checklist.pdf",
+        mimeType: "application/pdf",
+        size: 1024
+    )
+
+    try await store.upsertThreadDetails(
+        [
+            MailThreadDetail(
+                thread: MailThread(
+                    id: threadID,
+                    accountID: account.id,
+                    providerThreadID: "thread-1",
+                    subject: "Release checklist",
+                    participantSummary: "Ops",
+                    snippet: "Original snippet",
+                    lastActivityAt: .now,
+                    hasUnread: true,
+                    isStarred: false,
+                    isInInbox: true,
+                    mailboxRefs: [inbox],
+                    latestMessageID: messageID,
+                    attachmentCount: 1,
+                    syncRevision: "rev-1"
+                ),
+                messages: [
+                    MailMessage(
+                        id: messageID,
+                        threadID: threadID,
+                        accountID: account.id,
+                        providerMessageID: "message-thread-1",
+                        sender: MailParticipant(name: "Ops", emailAddress: "ops@example.com"),
+                        toRecipients: [MailParticipant(name: account.displayName, emailAddress: account.primaryEmail)],
+                        sentAt: .now,
+                        receivedAt: .now,
+                        snippet: "Original snippet",
+                        plainBody: "Hot body",
+                        htmlBody: "<p>Hot body</p>",
+                        bodyCacheState: .hot,
+                        headers: [MessageHeader(name: "Subject", value: "Release checklist")],
+                        mailboxRefs: [inbox],
+                        attachments: [hotAttachment],
+                        isRead: false,
+                        isOutgoing: false
+                    )
+                ]
+            )
+        ],
+        checkpoint: nil
+    )
+
+    try await store.upsertThreadDetails(
+        [
+            MailThreadDetail(
+                thread: MailThread(
+                    id: threadID,
+                    accountID: account.id,
+                    providerThreadID: "thread-1",
+                    subject: "Release checklist",
+                    participantSummary: "Ops",
+                    snippet: "Updated snippet",
+                    lastActivityAt: .now,
+                    hasUnread: false,
+                    isStarred: true,
+                    isInInbox: true,
+                    mailboxRefs: [inbox, starred],
+                    latestMessageID: messageID,
+                    attachmentCount: 0,
+                    syncRevision: "rev-2"
+                ),
+                messages: [
+                    MailMessage(
+                        id: messageID,
+                        threadID: threadID,
+                        accountID: account.id,
+                        providerMessageID: "message-thread-1",
+                        sender: MailParticipant(name: "Ops", emailAddress: "ops@example.com"),
+                        toRecipients: [MailParticipant(name: account.displayName, emailAddress: account.primaryEmail)],
+                        sentAt: .now,
+                        receivedAt: .now,
+                        snippet: "Updated snippet",
+                        plainBody: nil,
+                        htmlBody: nil,
+                        bodyCacheState: .missing,
+                        headers: [MessageHeader(name: "Subject", value: "Release checklist")],
+                        mailboxRefs: [inbox, starred],
+                        attachments: [],
+                        isRead: true,
+                        isOutgoing: false
+                    )
+                ]
+            )
+        ],
+        checkpoint: nil
+    )
+
+    let refreshed = try #require(try await store.loadThread(id: threadID))
+    let message = try #require(refreshed.messages.first)
+    #expect(message.plainBody == "Hot body")
+    #expect(message.htmlBody == "<p>Hot body</p>")
+    #expect(message.attachments == [hotAttachment])
+    #expect(message.bodyCacheState == .hot)
+    #expect(message.isRead == true)
+    #expect(refreshed.thread.isStarred == true)
+    #expect(refreshed.thread.mailboxRefs.contains(starred))
 }
 
 @Test
@@ -1406,6 +1580,76 @@ private final class TestMailProvider: @unchecked Sendable, MailProvider {
 
     func recordedAppliedMutations() async -> [MailMutation] {
         appliedMutations
+    }
+}
+
+private final class BlockingSyncProvider: @unchecked Sendable, MailProvider {
+    let kind: ProviderKind = .gmail
+    let environment: ProviderEnvironment = .production(
+        apiBaseURL: URL(string: "https://example.com")!,
+        authBaseURL: URL(string: "https://example.com")!,
+        userInfoURL: URL(string: "https://example.com/me")!
+    )
+
+    private let state = BlockingSyncProviderState()
+    private let page: MailSyncPage
+
+    init(page: MailSyncPage) {
+        self.page = page
+    }
+
+    @MainActor
+    func authorize() async throws -> ProviderSession {
+        throw MailProviderError.unsupported("Not used in tests.")
+    }
+
+    @MainActor
+    func handleRedirectURL(_ url: URL) -> Bool {
+        false
+    }
+
+    func restoreSession(_ session: ProviderSession) async throws -> ProviderSession {
+        session
+    }
+
+    func listMailboxes(session: ProviderSession, accountID: MailAccountID) async throws -> [MailboxRef] {
+        page.mailboxes
+    }
+
+    func syncPage(session: ProviderSession, accountID: MailAccountID, request: MailSyncRequest) async throws -> MailSyncPage {
+        await state.recordSyncCall()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        return page
+    }
+
+    func fetchThread(session: ProviderSession, accountID: MailAccountID, providerThreadID: String) async throws -> MailThreadDetail {
+        throw MailProviderError.unsupported("Not used in tests.")
+    }
+
+    func fetchAttachment(session: ProviderSession, accountID: MailAccountID, attachment: MailAttachment) async throws -> Data {
+        throw MailProviderError.unsupported("Not used in tests.")
+    }
+
+    func apply(session: ProviderSession, mutation: MailMutation) async throws {}
+
+    func send(session: ProviderSession, draft: OutgoingDraft) async throws -> SentDraftReceipt {
+        throw MailProviderError.unsupported("Not used in tests.")
+    }
+
+    func syncCallCount() async -> Int {
+        await state.syncCallCount()
+    }
+}
+
+private actor BlockingSyncProviderState {
+    private var count = 0
+
+    func recordSyncCall() {
+        count += 1
+    }
+
+    func syncCallCount() -> Int {
+        count
     }
 }
 
