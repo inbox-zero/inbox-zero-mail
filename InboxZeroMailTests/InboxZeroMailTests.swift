@@ -570,6 +570,7 @@ private actor StubWorkspace: MailWorkspace {
     func start() async {}
     func setForegroundActive(_ isActive: Bool) async {}
     func connectAccount(kind: ProviderKind) async throws {}
+    func reconnectAccount(accountID: MailAccountID) async throws {}
     func listAccounts() async throws -> [MailAccount] { accounts }
     func listThreads(query: ThreadListQuery) async throws -> [MailThread] { [] }
     func countThreads(query: ThreadListQuery) async throws -> Int { 0 }

@@ -1,3 +1,4 @@
+import SwiftSoup
 import SwiftUI
 import WebKit
 
@@ -13,71 +14,144 @@ enum HTMLContentSecurity {
         allowsRemoteContent: Bool,
         imageProxy: ImageProxyConfiguration? = nil
     ) -> String {
-        var sanitized = html
-
-        let patterns = [
-            "(?is)<script\\b[^>]*>.*?</script>",
-            "(?is)<meta\\b[^>]*http-equiv\\s*=\\s*([\"'])?refresh\\1?[^>]*>",
-            "(?is)<base\\b[^>]*>",
-            "(?is)<link\\b[^>]*>",
-            "(?is)<(iframe|frame|frameset|object|embed|form|video|audio|svg)\\b[^>]*>.*?</\\1>",
-            "(?is)<(input|button|select|option|textarea|source)\\b[^>]*\\/?>",
-        ]
-
-        for pattern in patterns {
-            sanitized = sanitized.replacingOccurrences(
-                of: pattern,
-                with: "",
-                options: .regularExpression
-            )
+        guard let document = try? SwiftSoup.parseBodyFragment(html) else {
+            return ""
         }
+        document.outputSettings()
+            .prettyPrint(pretty: false)
+            .charset(String.Encoding.utf8)
 
-        sanitized = sanitized
-            .replacingOccurrences(
-                of: "(?i)\\son[a-z]+\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)",
-                with: "",
-                options: .regularExpression
-            )
-            .replacingOccurrences(
-                of: "(?i)(href|src)\\s*=\\s*([\"'])\\s*(javascript:|data:text/html)[^\"']*\\2",
-                with: "$1=$2about:blank$2",
-                options: .regularExpression
-            )
-            .replacingOccurrences(
-                of: "(?i)@import\\s+(url\\()?['\"]https?://[^;'\")]+['\"]\\)?;?",
-                with: "",
-                options: .regularExpression
-            )
+        let policy: RemoteAssetPolicy = allowsRemoteContent ? .allow(imageProxy) : .strip
+        sanitizeDocument(document, policy: policy)
 
-        if allowsRemoteContent {
-            if let imageProxy {
-                sanitized = rewriteRemoteAssetURLs(in: sanitized, using: imageProxy)
+        return (try? document.body()?.html()) ?? ""
+    }
+
+    private enum RemoteAssetPolicy {
+        case strip
+        case allow(ImageProxyConfiguration?)
+    }
+
+    private static let blockedURLPlaceholder = "about:blank"
+
+    private static let forbiddenTagNames: Set<String> = [
+        "script", "iframe", "frame", "frameset", "object", "embed", "form",
+        "video", "audio", "svg", "input", "button", "select", "option",
+        "textarea", "source", "base", "link",
+    ]
+
+    private static let remoteAssetAttributeNames: Set<String> = ["src", "poster", "background"]
+
+    private static let cssImportRegex = try! NSRegularExpression(
+        pattern: #"(?i)@import\s+(url\()?['"]?https?://[^;'")]+['"]?\)?;?"#
+    )
+
+    private static let cssRemoteURLRegex = try! NSRegularExpression(
+        pattern: #"(?i)url\(\s*(["']?)(https?://[^)"']+)\1\s*\)"#
+    )
+
+    private static func sanitizeDocument(_ document: Document, policy: RemoteAssetPolicy) {
+        guard let elements = try? document.getAllElements().array() else { return }
+        for element in elements {
+            let tag = element.tagName().lowercased()
+
+            if forbiddenTagNames.contains(tag) {
+                try? element.remove()
+                continue
             }
-        } else {
-            sanitized = sanitized
-                .replacingOccurrences(
-                    of: "(?i)(\\b(?:src|poster|background)\\s*=\\s*[\"'])https?://[^\"']*([\"'])",
-                    with: "$1about:blank$2",
-                    options: .regularExpression
-                )
-                .replacingOccurrences(
-                    of: "(?i)(\\b(?:src|poster|background)\\s*=\\s*)https?://[^\\s>]+",
-                    with: "$1about:blank",
-                    options: .regularExpression
-                )
-                .replacingOccurrences(
-                    of: "(?i)\\ssrcset\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)",
-                    with: "",
-                    options: .regularExpression
-                )
-                .replacingOccurrences(
-                    of: "(?i)url\\((\\s*[\"']?)https?://[^)]+\\)",
-                    with: "url(about:blank)",
-                    options: .regularExpression
-                )
-        }
+            if tag == "meta",
+               let httpEquiv = try? element.attr("http-equiv"),
+               httpEquiv.lowercased() == "refresh" {
+                try? element.remove()
+                continue
+            }
 
-        return sanitized
+            sanitizeElementAttributes(element, policy: policy)
+
+            if tag == "style" {
+                rewriteStyleDataNodes(in: element, policy: policy)
+            }
+        }
+    }
+
+    private static func sanitizeElementAttributes(_ element: Element, policy: RemoteAssetPolicy) {
+        for attribute in element.getAttributes()?.asList() ?? [] {
+            let key = attribute.getKey()
+            let lowerKey = key.lowercased()
+            let value = attribute.getValue()
+
+            if lowerKey.hasPrefix("on") {
+                try? element.removeAttr(key)
+                continue
+            }
+            if (lowerKey == "href" || lowerKey == "src"), hasUnsafeURLScheme(value) {
+                try? element.attr(key, blockedURLPlaceholder)
+                continue
+            }
+            if remoteAssetAttributeNames.contains(lowerKey), isRemoteHTTPURL(value) {
+                switch policy {
+                case .strip:
+                    try? element.attr(key, blockedURLPlaceholder)
+                case .allow(let proxy):
+                    if let proxy {
+                        try? element.attr(key, proxy.proxiedAssetURL(for: value))
+                    }
+                }
+                continue
+            }
+            if lowerKey == "srcset" {
+                switch policy {
+                case .strip:
+                    try? element.removeAttr(key)
+                case .allow(let proxy):
+                    if let proxy {
+                        try? element.attr(key, rewriteSrcset(value, using: proxy))
+                    }
+                }
+                continue
+            }
+            if lowerKey == "style" {
+                try? element.attr(key, rewriteStyleSheet(value, policy: policy))
+            }
+        }
+    }
+
+    private static func rewriteStyleDataNodes(in element: Element, policy: RemoteAssetPolicy) {
+        for node in element.getChildNodes() {
+            guard let dataNode = node as? DataNode else { continue }
+            let rewritten = rewriteStyleSheet(dataNode.getWholeData(), policy: policy)
+            _ = dataNode.setWholeData(rewritten)
+        }
+    }
+
+    private static func rewriteStyleSheet(_ css: String, policy: RemoteAssetPolicy) -> String {
+        let range = NSRange(css.startIndex..., in: css)
+        let withoutImports = cssImportRegex.stringByReplacingMatches(
+            in: css,
+            range: range,
+            withTemplate: ""
+        )
+        return replacingMatches(in: withoutImports, regex: cssRemoteURLRegex) { groups in
+            let quote = groups[1]
+            let url = groups[2]
+            switch policy {
+            case .strip:
+                return "url(\(blockedURLPlaceholder))"
+            case .allow(let proxy):
+                let rewrittenURL = proxy?.proxiedAssetURL(for: url) ?? url
+                return "url(\(quote)\(rewrittenURL)\(quote))"
+            }
+        }
+    }
+
+    private static func hasUnsafeURLScheme(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.hasPrefix("javascript:") || trimmed.hasPrefix("data:text/html")
+    }
+
+    private static func isRemoteHTTPURL(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://")
     }
 
     static func securityHeaders(
@@ -137,50 +211,6 @@ enum HTMLContentSecurity {
     ) -> String {
         guard allowsRemoteContent else { return "data:" }
         return "data: \(imageProxy?.origin ?? "https:")"
-    }
-
-    private static func rewriteRemoteAssetURLs(
-        in html: String,
-        using imageProxy: ImageProxyConfiguration
-    ) -> String {
-        var rewritten = html
-
-        rewritten = replacingMatches(
-            in: rewritten,
-            pattern: #"(?i)(\b(?:src|poster|background)\s*=\s*["'])(https?://[^"']*)(["'])"#
-        ) { groups in
-            "\(groups[1])\(imageProxy.proxiedAssetURL(for: groups[2]))\(groups[3])"
-        }
-
-        rewritten = replacingMatches(
-            in: rewritten,
-            pattern: #"(?i)(\b(?:src|poster|background)\s*=\s*)(https?://[^\s>]+)"#
-        ) { groups in
-            "\(groups[1])\(imageProxy.proxiedAssetURL(for: groups[2]))"
-        }
-
-        rewritten = replacingMatches(
-            in: rewritten,
-            pattern: #"(?i)(\bsrcset\s*=\s*["'])([^"']*)(["'])"#
-        ) { groups in
-            "\(groups[1])\(rewriteSrcset(groups[2], using: imageProxy))\(groups[3])"
-        }
-
-        rewritten = replacingMatches(
-            in: rewritten,
-            pattern: #"(?i)(\bsrcset\s*=\s*)([^\s>]+)"#
-        ) { groups in
-            "\(groups[1])\(rewriteSrcset(groups[2], using: imageProxy))"
-        }
-
-        rewritten = replacingMatches(
-            in: rewritten,
-            pattern: #"(?i)url\((\s*["']?)(https?://[^)"']+)(["']?\s*)\)"#
-        ) { groups in
-            "url(\(groups[1])\(imageProxy.proxiedAssetURL(for: groups[2]))\(groups[3]))"
-        }
-
-        return rewritten
     }
 
     private static func rewriteSrcset(
@@ -250,14 +280,9 @@ enum HTMLContentSecurity {
 
     private static func replacingMatches(
         in input: String,
-        pattern: String,
-        options: NSRegularExpression.Options = [],
+        regex: NSRegularExpression,
         transform: ([String]) -> String
     ) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
-            return input
-        }
-
         let searchRange = NSRange(input.startIndex..., in: input)
         let matches = regex.matches(in: input, range: searchRange)
         guard matches.isEmpty == false else { return input }

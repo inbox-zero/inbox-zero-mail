@@ -14,6 +14,7 @@
 		A10000410000000000000001 /* ProviderGmail in Frameworks */ = {isa = PBXBuildFile; productRef = A10000420000000000000001 /* ProviderGmail */; };
 		A10000510000000000000001 /* ProviderOutlook in Frameworks */ = {isa = PBXBuildFile; productRef = A10000520000000000000001 /* ProviderOutlook */; };
 		A10000710000000000000001 /* AppUpdates in Frameworks */ = {isa = PBXBuildFile; productRef = A10000720000000000000001 /* AppUpdates */; };
+		A10000810000000000000001 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = A10000820000000000000001 /* SwiftSoup */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -75,6 +76,7 @@
 				A10000310000000000000001 /* MailFeatures in Frameworks */,
 				A10000410000000000000001 /* ProviderGmail in Frameworks */,
 				A10000510000000000000001 /* ProviderOutlook in Frameworks */,
+				A10000810000000000000001 /* SwiftSoup in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -152,6 +154,7 @@
 				A10000320000000000000001 /* MailFeatures */,
 				A10000420000000000000001 /* ProviderGmail */,
 				A10000520000000000000001 /* ProviderOutlook */,
+				A10000820000000000000001 /* SwiftSoup */,
 			);
 			productName = InboxZeroMail;
 			productReference = 47CC6AB82F77A8760009E484 /* InboxZeroMail.app */;
@@ -243,6 +246,7 @@
 				A10000330000000000000001 /* XCLocalSwiftPackageReference "Packages/MailFeatures" */,
 				A10000430000000000000001 /* XCLocalSwiftPackageReference "Packages/ProviderGmail" */,
 				A10000530000000000000001 /* XCLocalSwiftPackageReference "Packages/ProviderOutlook" */,
+				A10000830000000000000001 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 47CC6AB92F77A8760009E484 /* Products */;
@@ -666,6 +670,17 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		A10000830000000000000001 /* XCRemoteSwiftPackageReference "SwiftSoup" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/scinfu/SwiftSoup";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.7.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		A10000020000000000000001 /* MailCore */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -701,6 +716,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A10000730000000000000001 /* XCLocalSwiftPackageReference "Packages/AppUpdates" */;
 			productName = AppUpdates;
+		};
+		A10000820000000000000001 /* SwiftSoup */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000830000000000000001 /* XCRemoteSwiftPackageReference "SwiftSoup" */;
+			productName = SwiftSoup;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
