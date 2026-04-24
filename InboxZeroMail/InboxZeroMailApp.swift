@@ -180,9 +180,10 @@ private struct WindowActivityBridge: NSViewRepresentable {
             }
         }
 
+        @MainActor
         func attach(to view: NSView) {
             guard let window = view.window else {
-                DispatchQueue.main.async { [weak self, weak view] in
+                Task { @MainActor [weak self, weak view] in
                     guard let self, let view else { return }
                     self.attach(to: view)
                 }
@@ -192,7 +193,7 @@ private struct WindowActivityBridge: NSViewRepresentable {
             guard observedWindow !== window else {
                 activateWindowIfNeeded(window)
                 if window.isKeyWindow {
-                    store.setActiveWindow(windowID: model.windowID)
+                    setActiveWindow()
                 }
                 return
             }
@@ -208,15 +209,22 @@ private struct WindowActivityBridge: NSViewRepresentable {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                guard let self else { return }
-                self.store.setActiveWindow(windowID: self.model.windowID)
+                Task { @MainActor [weak self] in
+                    self?.setActiveWindow()
+                }
             }
 
             if window.isKeyWindow {
-                store.setActiveWindow(windowID: model.windowID)
+                setActiveWindow()
             }
         }
 
+        @MainActor
+        private func setActiveWindow() {
+            store.setActiveWindow(windowID: model.windowID)
+        }
+
+        @MainActor
         private func activateWindowIfNeeded(_ window: NSWindow) {
             guard isUITesting, hasForcedUITestActivation == false else { return }
             hasForcedUITestActivation = true
