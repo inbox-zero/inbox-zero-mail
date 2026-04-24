@@ -203,6 +203,7 @@ final class RichComposeEditorContainer: NSView, NSTextViewDelegate {
         textView.owner = self
         textView.delegate = self
         textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.setAccessibilityIdentifier("compose-body")
         textView.drawsBackground = false
         textView.backgroundColor = .clear
         textView.textColor = NSColor(MailDesignTokens.textPrimary)
