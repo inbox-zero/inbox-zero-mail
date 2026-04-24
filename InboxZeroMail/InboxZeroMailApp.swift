@@ -241,6 +241,7 @@ private struct WindowActivityBridge: NSViewRepresentable {
 private struct AppSettingsView: View {
     let store: MailAppStore
 
+    @State private var selectedPane: SettingsPane = .general
     @AppStorage(AppPreferences.loadRemoteImagesKey)
     private var loadRemoteImagesAutomatically = AppPreferences.loadRemoteImagesByDefault
     @AppStorage(AppPreferences.threadRowDensityKey)
@@ -305,10 +306,42 @@ private struct AppSettingsView: View {
         )
     }
 
-    private var canAddCustomSplitInbox: Bool {
-        let trimmedTitle = newSplitInboxTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedTitle.isEmpty == false else { return false }
+    private var selectedLabelOption: SplitInboxMailboxOption? {
+        labelOptions.first { $0.queryText == selectedLabelQueryText }
+    }
 
+    private var selectedCategoryOption: SplitInboxMailboxOption? {
+        categoryOptions.first { $0.queryText == selectedCategoryQueryText }
+    }
+
+    private var resolvedNewSplitInboxTitle: String {
+        let trimmedTitle = newSplitInboxTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedTitle.isEmpty == false {
+            return trimmedTitle
+        }
+
+        switch newSplitInboxKind {
+        case .label:
+            return selectedLabelOption?.title ?? "Label"
+        case .category:
+            return selectedCategoryOption?.title ?? "Category"
+        case .query:
+            return "Custom"
+        }
+    }
+
+    private var newSplitInboxTitlePlaceholder: String {
+        switch newSplitInboxKind {
+        case .label:
+            selectedLabelOption?.title ?? "Tab title"
+        case .category:
+            selectedCategoryOption?.title ?? "Tab title"
+        case .query:
+            "Tab title"
+        }
+    }
+
+    private var canAddCustomSplitInbox: Bool {
         switch newSplitInboxKind {
         case .label:
             return selectedLabelQueryText.isEmpty == false
@@ -322,47 +355,121 @@ private struct AppSettingsView: View {
     var body: some View {
         let _ = avatarSettingsVersion
         let _ = splitInboxTabsVersion
-        TabView {
-            generalSettingsTab
-                .tabItem {
-                    Label("General", systemImage: "gearshape")
-                }
+        HStack(spacing: 0) {
+            settingsSidebar
 
-            accountsSettingsTab
-                .tabItem {
-                    Label("Accounts", systemImage: "person.crop.circle")
-                }
+            Divider()
+
+            settingsDetail
         }
-        .frame(width: 560, height: 460)
+        .frame(minWidth: 780, idealWidth: 820, minHeight: 560, idealHeight: 620)
+        .background(SettingsPalette.windowBackground)
         .accountDisconnectConfirmation(account: $accountPendingDisconnect) { accountID in
             store.disconnectAccount(accountID: accountID)
+        }
+        .onAppear {
+            seedCustomSplitInboxDefaultsIfNeeded()
+        }
+        .onChange(of: labelOptions) { _, _ in
+            seedCustomSplitInboxDefaultsIfNeeded()
+        }
+        .onChange(of: categoryOptions) { _, _ in
+            seedCustomSplitInboxDefaultsIfNeeded()
+        }
+        .onChange(of: newSplitInboxKind) { _, _ in
+            seedCustomSplitInboxDefaultsIfNeeded()
+        }
+    }
+
+    private var settingsSidebar: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Settings")
+                .font(.system(size: 16, weight: .semibold))
+                .padding(.horizontal, 10)
+
+            VStack(spacing: 4) {
+                ForEach(SettingsPane.allCases) { pane in
+                    Button {
+                        selectedPane = pane
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: pane.systemImage)
+                                .font(.system(size: 13, weight: .medium))
+                                .frame(width: 18)
+
+                            Text(pane.title)
+                                .lineLimit(1)
+
+                            Spacer(minLength: 0)
+                        }
+                        .font(.system(size: 13, weight: selectedPane == pane ? .semibold : .regular))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background {
+                            if selectedPane == pane {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.accentColor.opacity(0.16))
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(pane.title)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 18)
+        .frame(width: 180)
+        .frame(maxHeight: .infinity)
+        .background(SettingsPalette.sidebarBackground)
+    }
+
+    @ViewBuilder
+    private var settingsDetail: some View {
+        switch selectedPane {
+        case .general:
+            generalSettingsTab
+        case .accounts:
+            accountsSettingsTab
         }
     }
 
     private var generalSettingsTab: some View {
-        Form {
-            Section {
-                Toggle("Load Remote Images Automatically", isOn: $loadRemoteImagesAutomatically)
-            } header: {
-                Text("Privacy")
-            } footer: {
-                Text("Blocks external images and other remote assets in HTML email by default.")
-            }
-
-            Section {
-                Picker("Message List Density", selection: $threadRowDensityRawValue) {
-                    ForEach(ThreadRowDensity.allCases) { density in
-                        Text(density.title).tag(density.rawValue)
-                    }
+        SettingsPaneContent(
+            title: "General",
+            subtitle: "Reading, display, and split inbox preferences."
+        ) {
+            SettingsSection("Privacy", footer: "Remote assets can reveal when a message was opened.") {
+                SettingsRow(
+                    title: "Load remote images",
+                    subtitle: "Show external images in HTML messages automatically."
+                ) {
+                    Toggle("Load remote images", isOn: $loadRemoteImagesAutomatically)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
-                .pickerStyle(.segmented)
-            } header: {
-                Text("Display")
-            } footer: {
-                Text("Comfortable is the default. Compact keeps the previous tighter thread list.")
             }
 
-            Section {
+            SettingsSection("Display", footer: "Comfortable is the default. Compact keeps the thread list tighter.") {
+                SettingsRow(title: "Message list density") {
+                    Picker("Message list density", selection: $threadRowDensityRawValue) {
+                        ForEach(ThreadRowDensity.allCases) { density in
+                            Text(density.title).tag(density.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                }
+            }
+
+            SettingsSection(
+                "Split Inbox Tabs",
+                footer: "These tabs appear in the split inbox bar and define the cycling order."
+            ) {
                 ForEach(Array(configuredSplitInboxItems.enumerated()), id: \.element.id) { index, item in
                     SplitInboxSettingsRow(
                         title: item.normalizedTitle,
@@ -375,11 +482,13 @@ private struct AppSettingsView: View {
                         onMoveDown: { moveSplitInboxTab(from: index, to: index + 1) },
                         onRemove: { removeSplitInboxItem(item) }
                     )
+
+                    if index < configuredSplitInboxItems.count - 1 || hiddenBuiltInSplitInboxItems.isEmpty == false {
+                        SettingsSeparator()
+                    }
                 }
 
                 if hiddenBuiltInSplitInboxItems.isEmpty == false {
-                    Divider()
-
                     ForEach(hiddenBuiltInSplitInboxItems) { item in
                         SplitInboxSettingsRow(
                             title: item.normalizedTitle,
@@ -392,105 +501,166 @@ private struct AppSettingsView: View {
                             onMoveDown: {},
                             onRemove: {},
                             trailingActionLabel: "Add",
+                            trailingActionSystemImage: "plus",
                             trailingAction: { addBuiltInSplitInboxItem(item) }
                         )
+
+                        if item.id != hiddenBuiltInSplitInboxItems.last?.id {
+                            SettingsSeparator()
+                        }
                     }
                 }
 
-                Divider()
+                SettingsSeparator()
 
-                VStack(alignment: .leading, spacing: 10) {
-                    TextField("Tab Title", text: $newSplitInboxTitle)
+                SettingsRow(
+                    title: "Default tabs",
+                    subtitle: "Restore All, Unread, Starred, and Snoozed."
+                ) {
+                    Button("Reset") {
+                        resetSplitInboxTabs()
+                    }
+                    .controlSize(.small)
+                    .disabled(configuredSplitInboxItems == SplitInboxItem.defaultItems)
+                }
+            }
 
-                    Picker("Match Type", selection: $newSplitInboxKind) {
+            SettingsSection(
+                "New Split Inbox Tab",
+                footer: "Custom queries support label, category, state, and mailbox tokens."
+            ) {
+                SettingsRow(title: "Title", subtitle: "Shown in the split inbox bar.") {
+                    TextField(newSplitInboxTitlePlaceholder, text: $newSplitInboxTitle)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 220)
+                }
+
+                SettingsSeparator()
+
+                SettingsRow(title: "Match") {
+                    Picker("Match", selection: $newSplitInboxKind) {
                         ForEach(CustomSplitInboxKind.allCases) { kind in
                             Text(kind.title).tag(kind)
                         }
                     }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                }
 
-                    switch newSplitInboxKind {
-                    case .label:
-                        if labelOptions.isEmpty {
-                            Text("No labels are available yet.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Picker("Label", selection: $selectedLabelQueryText) {
-                                ForEach(labelOptions) { option in
-                                    Text(option.title).tag(option.queryText)
-                                }
-                            }
-                        }
-                    case .category:
-                        if categoryOptions.isEmpty {
-                            Text("No categories are available yet.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Picker("Category", selection: $selectedCategoryQueryText) {
-                                ForEach(categoryOptions) { option in
-                                    Text(option.title).tag(option.queryText)
-                                }
-                            }
-                        }
-                    case .query:
-                        TextField("label:receipts is:unread", text: $customSplitInboxQueryText)
-                    }
+                SettingsSeparator()
 
-                    Picker("Base Tab", selection: $newSplitInboxBaseTab) {
+                splitInboxMatchRow
+
+                SettingsSeparator()
+
+                SettingsRow(title: "Base tab", subtitle: "Applies a built-in view first.") {
+                    Picker("Base tab", selection: $newSplitInboxBaseTab) {
                         ForEach(UnifiedTab.allCases) { tab in
                             Text(tab.title).tag(tab)
                         }
                     }
-
-                    HStack {
-                        Spacer()
-                        Button("Add Custom Tab") {
-                            addCustomSplitInbox()
-                        }
-                        .disabled(canAddCustomSplitInbox == false)
-                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 260)
                 }
-            } header: {
-                Text("Split Inbox")
-            } footer: {
-                Text("Controls which tabs appear in the split inbox bar and the order used when cycling with Tab. Custom queries currently support `label:`, `category:`, `is:`, and `in:` tokens.")
+
+                SettingsSeparator()
+
+                HStack {
+                    Spacer()
+                    Button {
+                        addCustomSplitInbox()
+                    } label: {
+                        Label("Add Tab", systemImage: "plus")
+                    }
+                    .controlSize(.small)
+                    .disabled(canAddCustomSplitInbox == false)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
         }
-        .padding(20)
-        .onAppear {
-            seedCustomSplitInboxDefaultsIfNeeded()
+    }
+
+    @ViewBuilder
+    private var splitInboxMatchRow: some View {
+        switch newSplitInboxKind {
+        case .label:
+            SettingsRow(
+                title: "Label",
+                subtitle: labelOptions.isEmpty ? "No labels are available yet." : nil
+            ) {
+                if labelOptions.isEmpty {
+                    Text("Unavailable")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Label", selection: $selectedLabelQueryText) {
+                        ForEach(labelOptions) { option in
+                            Text(option.title).tag(option.queryText)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 220)
+                }
+            }
+        case .category:
+            SettingsRow(
+                title: "Category",
+                subtitle: categoryOptions.isEmpty ? "No categories are available yet." : nil
+            ) {
+                if categoryOptions.isEmpty {
+                    Text("Unavailable")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Category", selection: $selectedCategoryQueryText) {
+                        ForEach(categoryOptions) { option in
+                            Text(option.title).tag(option.queryText)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 220)
+                }
+            }
+        case .query:
+            SettingsRow(title: "Query", subtitle: "Example: label:receipts is:unread") {
+                TextField("label:receipts is:unread", text: $customSplitInboxQueryText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
+            }
         }
     }
 
     private var accountsSettingsTab: some View {
-        Group {
+        SettingsPaneContent(
+            title: "Accounts",
+            subtitle: "Per-account appearance in unified inbox views."
+        ) {
             if store.accounts.isEmpty {
-                ContentUnavailableView(
-                    "No Accounts",
+                SettingsEmptyState(
+                    title: "No Accounts",
                     systemImage: "person.crop.circle.badge.plus",
-                    description: Text("Connect an inbox to manage it here.")
+                    message: "Connect an inbox to manage it here."
                 )
-                .padding(24)
             } else {
-                Form {
-                    Section {
-                        ForEach(store.accounts) { account in
-                            AccountAvatarSettingsRow(
-                                account: account,
-                                accounts: store.accounts,
-                                onDisconnect: {
-                                    accountPendingDisconnect = account
-                                }
-                            )
+                SettingsSection(
+                    "Accounts",
+                    footer: "Each inbox starts with a different color. Disconnecting removes cached mail for that account from this Mac."
+                ) {
+                    ForEach(Array(store.accounts.enumerated()), id: \.element.id) { index, account in
+                        AccountAvatarSettingsRow(
+                            account: account,
+                            accounts: store.accounts,
+                            onDisconnect: {
+                                accountPendingDisconnect = account
+                            }
+                        )
+
+                        if index < store.accounts.count - 1 {
+                            SettingsSeparator()
                         }
-                    } header: {
-                        Text("Accounts")
-                    } footer: {
-                        Text("Each inbox starts with a different color. Disconnecting removes cached mail for that account from this Mac.")
                     }
                 }
-                .padding(20)
             }
         }
     }
@@ -516,6 +686,10 @@ private struct AppSettingsView: View {
         AppPreferences.setConfiguredSplitInboxItems(configuredSplitInboxItems + [item])
     }
 
+    private func resetSplitInboxTabs() {
+        AppPreferences.setConfiguredSplitInboxItems(SplitInboxItem.defaultItems)
+    }
+
     private func addCustomSplitInbox() {
         guard canAddCustomSplitInbox else { return }
 
@@ -530,7 +704,7 @@ private struct AppSettingsView: View {
         }
 
         let newItem = SplitInboxItem(
-            title: newSplitInboxTitle,
+            title: resolvedNewSplitInboxTitle,
             tab: newSplitInboxBaseTab,
             queryText: queryText
         )
@@ -540,10 +714,10 @@ private struct AppSettingsView: View {
     }
 
     private func seedCustomSplitInboxDefaultsIfNeeded() {
-        if selectedLabelQueryText.isEmpty {
+        if selectedLabelQueryText.isEmpty || labelOptions.contains(where: { $0.queryText == selectedLabelQueryText }) == false {
             selectedLabelQueryText = labelOptions.first?.queryText ?? ""
         }
-        if selectedCategoryQueryText.isEmpty {
+        if selectedCategoryQueryText.isEmpty || categoryOptions.contains(where: { $0.queryText == selectedCategoryQueryText }) == false {
             selectedCategoryQueryText = categoryOptions.first?.queryText ?? ""
         }
     }
@@ -571,6 +745,215 @@ private struct AppSettingsView: View {
     }
 }
 
+private enum SettingsPane: String, CaseIterable, Identifiable {
+    case general
+    case accounts
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general:
+            "General"
+        case .accounts:
+            "Accounts"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general:
+            "gearshape"
+        case .accounts:
+            "person.crop.circle"
+        }
+    }
+}
+
+private enum SettingsPalette {
+    static var windowBackground: Color {
+        Color(nsColor: .windowBackgroundColor)
+    }
+
+    static var sidebarBackground: Color {
+        Color(nsColor: .underPageBackgroundColor)
+    }
+
+    static var sectionBackground: Color {
+        Color(nsColor: .controlBackgroundColor)
+    }
+
+    static var sectionBorder: Color {
+        Color(nsColor: .separatorColor).opacity(0.45)
+    }
+}
+
+private struct SettingsPaneContent<Content: View>: View {
+    let title: String
+    let subtitle: String?
+    let content: Content
+
+    init(
+        title: String,
+        subtitle: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 26, weight: .semibold))
+
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.bottom, 2)
+
+                content
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 24)
+            .frame(maxWidth: 680, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SettingsPalette.windowBackground)
+    }
+}
+
+private struct SettingsSection<Content: View>: View {
+    let title: String
+    let footer: String?
+    let content: Content
+
+    init(
+        _ title: String,
+        footer: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.footer = footer
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                content
+            }
+            .background(SettingsPalette.sectionBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(SettingsPalette.sectionBorder, lineWidth: 1)
+            }
+
+            if let footer {
+                Text(footer)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct SettingsRow<Accessory: View>: View {
+    let title: String
+    let subtitle: String?
+    let accessory: Accessory
+
+    init(
+        title: String,
+        subtitle: String? = nil,
+        @ViewBuilder accessory: () -> Accessory
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.accessory = accessory()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                if let subtitle, subtitle.isEmpty == false {
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Spacer(minLength: 16)
+
+            accessory
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(minHeight: 44)
+    }
+}
+
+private struct SettingsSeparator: View {
+    var body: some View {
+        Divider()
+            .padding(.leading, 12)
+    }
+}
+
+private struct SettingsEmptyState: View {
+    let title: String
+    let systemImage: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 34, weight: .regular))
+                .foregroundStyle(.secondary)
+
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+
+            Text(message)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, minHeight: 220)
+        .background(SettingsPalette.sectionBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(SettingsPalette.sectionBorder, lineWidth: 1)
+        }
+    }
+}
+
 private struct SplitInboxSettingsRow: View {
     let title: String
     let subtitle: String?
@@ -582,62 +965,82 @@ private struct SplitInboxSettingsRow: View {
     let onMoveDown: () -> Void
     let onRemove: () -> Void
     var trailingActionLabel: String? = nil
+    var trailingActionSystemImage: String? = nil
     var trailingAction: (() -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             if let countLabel {
                 Text(countLabel)
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .frame(width: 18, alignment: .leading)
+                    .frame(width: 22, alignment: .center)
             } else {
-                Color.clear
-                    .frame(width: 18, height: 1)
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, alignment: .center)
             }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+
                 if let subtitle, subtitle.isEmpty == false {
                     Text(subtitle)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 16)
 
             if let trailingActionLabel, let trailingAction {
-                Button(trailingActionLabel, action: trailingAction)
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
+                Button(action: trailingAction) {
+                    if let trailingActionSystemImage {
+                        Label(trailingActionLabel, systemImage: trailingActionSystemImage)
+                    } else {
+                        Text(trailingActionLabel)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
             } else {
                 HStack(spacing: 6) {
                     Button(action: onMoveUp) {
-                        Image(systemName: "arrow.up")
+                        Image(systemName: "chevron.up")
                             .font(.system(size: 11, weight: .semibold))
                     }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                     .disabled(canMoveUp == false)
+                    .help("Move up")
 
                     Button(action: onMoveDown) {
-                        Image(systemName: "arrow.down")
+                        Image(systemName: "chevron.down")
                             .font(.system(size: 11, weight: .semibold))
                     }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                     .disabled(canMoveDown == false)
+                    .help("Move down")
 
-                    Button("Remove", role: .destructive, action: onRemove)
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
-                        .disabled(canRemove == false)
+                    Button(role: .destructive, action: onRemove) {
+                        Image(systemName: "minus.circle")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(canRemove == false)
+                    .help("Remove tab")
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(minHeight: 44)
     }
 }
 
@@ -697,9 +1100,10 @@ private struct AccountAvatarSettingsRow: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(account.displayName)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 13))
+                        .lineLimit(1)
                     Text(account.primaryEmail)
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -724,7 +1128,7 @@ private struct AccountAvatarSettingsRow: View {
                 .frame(width: 132)
 
                 Text(AppPreferences.accountAvatarColorName(for: effectiveColorHex))
-                    .font(.caption)
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(width: 72, alignment: .leading)
             }
@@ -735,7 +1139,9 @@ private struct AccountAvatarSettingsRow: View {
             .buttonStyle(.borderless)
             .controlSize(.small)
         }
-        .padding(.vertical, 2)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(minHeight: 44)
     }
 }
 
