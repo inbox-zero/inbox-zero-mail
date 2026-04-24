@@ -104,7 +104,8 @@ jobs:
             -scheme InboxZeroMail \
             -destination "platform=macOS" \
             -only-testing:InboxZeroMailUITests \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
             DEVELOPMENT_TEAM=""

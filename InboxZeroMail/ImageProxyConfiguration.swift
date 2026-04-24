@@ -193,7 +193,7 @@ struct ImageProxyConfiguration: Equatable {
         "none",
     ]
 
-    private static let defaultSignedAssetProxyTTLSeconds = 60 * 60 * 24 * 7
+    private static let defaultSignedAssetProxyTTLSeconds = 5 * 60
 }
 
 private func decodeHTMLURLValue(_ value: String) -> String {
