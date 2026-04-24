@@ -369,8 +369,12 @@ public final class WindowModel {
         store.reconnectAccount(accountID: accountID)
     }
 
+    public func disconnect(accountID: MailAccountID) {
+        store.disconnectAccount(accountID: accountID)
+    }
+
     public func remove(accountID: MailAccountID) {
-        store.remove(accountID: accountID)
+        disconnect(accountID: accountID)
     }
 
     public func loadDemoInbox() {
@@ -379,6 +383,46 @@ public final class WindowModel {
 
     public func setMailboxHidden(_ mailboxID: MailboxID, hidden: Bool) {
         store.setMailboxHidden(mailboxID, hidden: hidden)
+    }
+
+    func reconcileAccountAvailability(validAccountIDs: Set<MailAccountID>) {
+        if let selectedAccountID, validAccountIDs.contains(selectedAccountID) == false {
+            self.selectedAccountID = nil
+            selectedTab = .all
+            selectedSplitInboxItem = .builtIn(.all)
+            mailboxScope = .inboxOnly
+        }
+
+        if let selectedMailboxID, validAccountIDs.contains(selectedMailboxID.accountID) == false {
+            self.selectedMailboxID = nil
+            mailboxScope = .inboxOnly
+        }
+
+        if let selectedThreadID, validAccountIDs.contains(selectedThreadID.accountID) == false {
+            closeThread()
+        }
+
+        if let hoveredThreadID, validAccountIDs.contains(hoveredThreadID.accountID) == false {
+            self.hoveredThreadID = nil
+        }
+
+        multiSelectedIDs = Set(multiSelectedIDs.filter { validAccountIDs.contains($0.accountID) })
+        if let multiSelectionAnchorID, validAccountIDs.contains(multiSelectionAnchorID.accountID) == false {
+            self.multiSelectionAnchorID = nil
+        }
+
+        threadDetailCache = threadDetailCache.filter { validAccountIDs.contains($0.key.accountID) }
+
+        if let composeDraft, validAccountIDs.contains(composeDraft.accountID) == false {
+            draftAutoSaveTask?.cancel()
+            draftAutoSaveTask = nil
+            composeMode = nil
+            self.composeDraft = nil
+        }
+
+        if let errorReconnectAccountID, validAccountIDs.contains(errorReconnectAccountID) == false {
+            dismissError()
+        }
     }
 
     // MARK: - Thread Actions

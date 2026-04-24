@@ -119,6 +119,11 @@ public final class MailAppStore {
         do {
             isRefreshing = true
             accounts = try await workspace.listAccounts()
+            let validAccountIDs = Set(accounts.map(\.id))
+            windowModels.removeAll { $0.value == nil }
+            for ref in windowModels {
+                ref.value?.reconcileAccountAvailability(validAccountIDs: validAccountIDs)
+            }
             // Reload mailboxes for all accounts (no filter)
             mailboxes = try await workspace.listMailboxes(accountID: nil)
             savedDrafts = (try? await workspace.listDrafts()) ?? []
@@ -209,15 +214,20 @@ public final class MailAppStore {
         connectAccount(kind: kind)
     }
 
-    public func remove(accountID: MailAccountID) {
+    public func disconnectAccount(accountID: MailAccountID) {
         Task { [weak self] in
             guard let self else { return }
             do {
                 try await workspace.removeAccount(accountID: accountID)
+                await reloadSharedData(reason: .manual)
             } catch {
                 windowModels.first(where: { $0.value != nil })?.value?.present(error)
             }
         }
+    }
+
+    public func remove(accountID: MailAccountID) {
+        disconnectAccount(accountID: accountID)
     }
 
     public func loadDemoInbox() {

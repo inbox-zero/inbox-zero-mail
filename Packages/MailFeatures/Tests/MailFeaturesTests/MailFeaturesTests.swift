@@ -7,7 +7,6 @@ import Testing
 @testable import MailFeatures
 
 private actor StubWorkspace: MailWorkspace {
-    let accounts: [MailAccount]
     let threads: [MailThread]
     let detail: MailThreadDetail?
     let threadDetails: [MailThreadID: MailThreadDetail]
@@ -17,8 +16,10 @@ private actor StubWorkspace: MailWorkspace {
     let threadQueryResults: [ThreadListQuery: [MailThread]]
     let threadCounts: [ThreadListQuery: Int]
     let startDelayNanoseconds: UInt64
+    private var storedAccounts: [MailAccount]
     private var performedMutations: [MailMutation] = []
     private var reconnectedAccountIDs: [MailAccountID] = []
+    private var removedAccountIDs: [MailAccountID] = []
     private var storedDrafts: [OutgoingDraft]
     private var sentDrafts: [OutgoingDraft] = []
     private var savedDrafts: [OutgoingDraft] = []
@@ -37,7 +38,7 @@ private actor StubWorkspace: MailWorkspace {
         threadCounts: [ThreadListQuery: Int] = [:],
         startDelayNanoseconds: UInt64 = 0
     ) {
-        self.accounts = accounts
+        self.storedAccounts = accounts
         self.threads = threads
         self.detail = detail
         self.threadDetails = threadDetails
@@ -61,7 +62,7 @@ private actor StubWorkspace: MailWorkspace {
     func reconnectAccount(accountID: MailAccountID) async throws {
         reconnectedAccountIDs.append(accountID)
     }
-    func listAccounts() async throws -> [MailAccount] { accounts }
+    func listAccounts() async throws -> [MailAccount] { storedAccounts }
     func listThreads(query: ThreadListQuery) async throws -> [MailThread] {
         threadQueryResults[query] ?? threads
     }
@@ -92,7 +93,11 @@ private actor StubWorkspace: MailWorkspace {
         sentDrafts.append(draft)
     }
     func seedDemoDataIfNeeded() async throws {}
-    func removeAccount(accountID: MailAccountID) async throws {}
+    func removeAccount(accountID: MailAccountID) async throws {
+        removedAccountIDs.append(accountID)
+        storedAccounts.removeAll { $0.id == accountID }
+        storedDrafts.removeAll { $0.accountID == accountID }
+    }
     func saveDraft(_ draft: OutgoingDraft) async throws {
         savedDrafts.append(draft)
         storedDrafts.removeAll { $0.id == draft.id }
@@ -115,6 +120,10 @@ private actor StubWorkspace: MailWorkspace {
 
     func recordedReconnectAccountIDs() async -> [MailAccountID] {
         reconnectedAccountIDs
+    }
+
+    func recordedRemovedAccountIDs() async -> [MailAccountID] {
+        removedAccountIDs
     }
 
     func recordedSentDrafts() async -> [OutgoingDraft] {
@@ -299,6 +308,31 @@ func unauthorizedErrorReconnectsFocusedAccount() async throws {
     #expect(recordedReconnects == [account.id])
     #expect(model.errorMessage == nil)
     #expect(model.errorReconnectAccountID == nil)
+}
+
+@Test
+@MainActor
+func disconnectSelectedAccountClearsWindowState() async throws {
+    let account = makeAccount()
+    let thread = makeThread(accountID: account.id)
+    let workspace = StubWorkspace(accounts: [account], threads: [thread], detail: nil)
+    let model = makeWindowModel(workspace: workspace)
+
+    model.store.register(model)
+    await model.store.reloadSharedData(reason: .initial)
+    await model.reloadThreads()
+    model.select(accountID: account.id)
+    model.open(threadID: thread.id)
+
+    model.disconnect(accountID: account.id)
+    try await Task.sleep(for: .milliseconds(100))
+
+    #expect(await workspace.recordedRemovedAccountIDs() == [account.id])
+    #expect(model.accounts.isEmpty)
+    #expect(model.selectedAccountID == nil)
+    #expect(model.selectedThreadID == nil)
+    #expect(model.selectedThreadDetail == nil)
+    #expect(model.isThreadOpen == false)
 }
 
 @Test

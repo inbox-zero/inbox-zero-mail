@@ -158,6 +158,76 @@ func queuedMutationsPersistUntilCompleted() async throws {
 }
 
 @Test
+func removeAccountDeletesOnlyThatAccountsLocalData() async throws {
+    let (store, path) = try makeStore()
+    let removedAccount = makeAccount(email: "remove@example.com")
+    let keptAccount = makeAccount(email: "keep@example.com")
+
+    try await seedWorkspaceStore(store: store, account: removedAccount)
+    try await seedWorkspaceStore(store: store, account: keptAccount)
+    try await store.upsertThreadDetails([], checkpoint: SyncCheckpoint(accountID: removedAccount.id, payload: "remove-checkpoint"))
+    try await store.upsertThreadDetails([], checkpoint: SyncCheckpoint(accountID: keptAccount.id, payload: "keep-checkpoint"))
+
+    let removedDraft = OutgoingDraft(accountID: removedAccount.id, subject: "Remove", plainBody: "Temporary")
+    let keptDraft = OutgoingDraft(accountID: keptAccount.id, subject: "Keep", plainBody: "Still here")
+    try await store.saveDraft(removedDraft)
+    try await store.saveDraft(keptDraft)
+
+    let removedThreadID = MailThreadID(accountID: removedAccount.id, providerThreadID: "thread-1")
+    let keptThreadID = MailThreadID(accountID: keptAccount.id, providerThreadID: "thread-1")
+    _ = try await store.enqueue(.star(threadID: removedThreadID))
+    _ = try await store.enqueue(.star(threadID: keptThreadID))
+
+    try await store.removeAccount(accountID: removedAccount.id)
+
+    #expect(try await store.listAccounts().map(\.id) == [keptAccount.id])
+    #expect(try await store.listDrafts().map(\.id) == [keptDraft.id])
+    #expect(try await store.listThreads(query: ThreadListQuery(tab: .all, accountFilter: removedAccount.id)).isEmpty)
+    #expect(try await store.listThreads(query: ThreadListQuery(tab: .all, accountFilter: keptAccount.id)).isEmpty == false)
+
+    let dbQueue = try DatabaseQueue(path: path)
+    let counts = try await dbQueue.read { db in
+        let removedAccountID = removedAccount.id.rawValue
+        let keptAccountID = keptAccount.id.rawValue
+
+        let removedAccounts = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM accounts WHERE id = ?", arguments: [removedAccountID]) ?? -1
+        let keptAccounts = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM accounts WHERE id = ?", arguments: [keptAccountID]) ?? -1
+        let removedMailboxes = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM mailboxes WHERE accountID = ?", arguments: [removedAccountID]) ?? -1
+        let keptMailboxes = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM mailboxes WHERE accountID = ?", arguments: [keptAccountID]) ?? -1
+        let removedMessages = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM messages WHERE accountID = ?", arguments: [removedAccountID]) ?? -1
+        let keptMessages = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM messages WHERE accountID = ?", arguments: [keptAccountID]) ?? -1
+        let removedCheckpoints = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM syncCheckpoints WHERE accountID = ?", arguments: [removedAccountID]) ?? -1
+        let keptCheckpoints = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM syncCheckpoints WHERE accountID = ?", arguments: [keptAccountID]) ?? -1
+        let removedQueuedMutations = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM queuedMutations WHERE accountID = ?", arguments: [removedAccountID]) ?? -1
+        let keptQueuedMutations = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM queuedMutations WHERE accountID = ?", arguments: [keptAccountID]) ?? -1
+
+        return [
+            "removedAccounts": removedAccounts,
+            "keptAccounts": keptAccounts,
+            "removedMailboxes": removedMailboxes,
+            "keptMailboxes": keptMailboxes,
+            "removedMessages": removedMessages,
+            "keptMessages": keptMessages,
+            "removedCheckpoints": removedCheckpoints,
+            "keptCheckpoints": keptCheckpoints,
+            "removedQueuedMutations": removedQueuedMutations,
+            "keptQueuedMutations": keptQueuedMutations,
+        ]
+    }
+
+    #expect(counts["removedAccounts"] == 0)
+    #expect(counts["keptAccounts"] == 1)
+    #expect(counts["removedMailboxes"] == 0)
+    #expect(counts["keptMailboxes"] == 1)
+    #expect(counts["removedMessages"] == 0)
+    #expect(counts["keptMessages"] == 1)
+    #expect(counts["removedCheckpoints"] == 0)
+    #expect(counts["keptCheckpoints"] == 1)
+    #expect(counts["removedQueuedMutations"] == 0)
+    #expect(counts["keptQueuedMutations"] == 1)
+}
+
+@Test
 func coldBodyEvictionKeepsOnlyHotThreadBodies() async throws {
     let (store, path) = try makeStore()
 

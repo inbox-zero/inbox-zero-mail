@@ -268,6 +268,13 @@ public actor MailWorkspaceController: MailWorkspace {
     }
 
     public func removeAccount(accountID: MailAccountID) async throws {
+        scheduledRefreshTasks[accountID]?.cancel()
+        scheduledRefreshTasks[accountID] = nil
+        inFlightRefreshes[accountID]?.cancel()
+        inFlightRefreshes[accountID] = nil
+        refreshBackoff[accountID] = nil
+        nextEligibleRefresh[accountID] = nil
+        labelVisibilityRefreshed.remove(accountID)
         try credentialsStore.delete(accountID: accountID)
         try await store.removeAccount(accountID: accountID)
         publishChange()
@@ -664,7 +671,14 @@ private extension MailWorkspaceController {
         try await store.saveSyncState(accountID: accountID, .init(phase: .syncing, lastSuccessfulSyncAt: account.syncState.lastSuccessfulSyncAt))
 
         do {
+            try Task.checkCancellation()
             let syncedAccount = try await syncAccountPages(account: account, provider: provider, session: session)
+            try Task.checkCancellation()
+            let accountStillExists = try await store.listAccounts().contains(where: { $0.id == accountID })
+            try Task.checkCancellation()
+            guard accountStillExists else {
+                return
+            }
             try await store.saveAccount(syncedAccount)
             try await store.evictColdBodies(maxHotThreads: 200, maxAge: 14 * 24 * 60 * 60)
             if account.syncState.isErrorState {
@@ -672,6 +686,8 @@ private extension MailWorkspaceController {
             }
             refreshBackoff[accountID] = 0
             nextEligibleRefresh[accountID] = nil
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             if isUnauthorized(error) {
                 await markAuthorizationFailure(accountID)

@@ -247,6 +247,7 @@ private struct AppSettingsView: View {
     @State private var selectedLabelQueryText = ""
     @State private var selectedCategoryQueryText = ""
     @State private var customSplitInboxQueryText = ""
+    @State private var accountPendingDisconnect: MailAccount?
 
     private var configuredSplitInboxItems: [SplitInboxItem] {
         AppPreferences.configuredSplitInboxItems()
@@ -325,6 +326,9 @@ private struct AppSettingsView: View {
                 }
         }
         .frame(width: 560, height: 460)
+        .accountDisconnectConfirmation(account: $accountPendingDisconnect) { accountID in
+            store.disconnectAccount(accountID: accountID)
+        }
     }
 
     private var generalSettingsTab: some View {
@@ -457,19 +461,25 @@ private struct AppSettingsView: View {
                 ContentUnavailableView(
                     "No Accounts",
                     systemImage: "person.crop.circle.badge.plus",
-                    description: Text("Connect an inbox to customize its avatar color.")
+                    description: Text("Connect an inbox to manage it here.")
                 )
                 .padding(24)
             } else {
                 Form {
                     Section {
                         ForEach(store.accounts) { account in
-                            AccountAvatarSettingsRow(account: account, accounts: store.accounts)
+                            AccountAvatarSettingsRow(
+                                account: account,
+                                accounts: store.accounts,
+                                onDisconnect: {
+                                    accountPendingDisconnect = account
+                                }
+                            )
                         }
                     } header: {
-                        Text("Avatar Colors")
+                        Text("Accounts")
                     } footer: {
-                        Text("Each inbox starts with a different color. Change it here anytime.")
+                        Text("Each inbox starts with a different color. Disconnecting removes cached mail for that account from this Mac.")
                     }
                 }
                 .padding(20)
@@ -652,6 +662,7 @@ private struct SplitInboxMailboxOption: Identifiable, Hashable {
 private struct AccountAvatarSettingsRow: View {
     let account: MailAccount
     let accounts: [MailAccount]
+    let onDisconnect: () -> Void
 
     private var effectiveColorHex: String {
         AppPreferences.effectiveAccountAvatarColorHex(for: account, accounts: accounts)
@@ -682,8 +693,10 @@ private struct AccountAvatarSettingsRow: View {
                     Text(account.primaryEmail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: 16)
 
@@ -707,6 +720,12 @@ private struct AccountAvatarSettingsRow: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 72, alignment: .leading)
             }
+
+            Button(role: .destructive, action: onDisconnect) {
+                Label("Disconnect", systemImage: "person.crop.circle.badge.xmark")
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
         }
         .padding(.vertical, 2)
     }

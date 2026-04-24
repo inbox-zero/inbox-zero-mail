@@ -345,13 +345,24 @@ public actor SQLiteMailStore: MailStore {
     }
 
     public func removeAccount(accountID: MailAccountID) async throws {
-        try await dbQueue.write { db in
+        try await dbQueue.write { [decoder] db in
             _ = try AccountRecord.deleteOne(db, key: accountID.rawValue)
             _ = try MailboxRecord.filter(Column("accountID") == accountID.rawValue).deleteAll(db)
             _ = try ThreadRecord.filter(Column("accountID") == accountID.rawValue).deleteAll(db)
             _ = try MessageRecord.filter(Column("accountID") == accountID.rawValue).deleteAll(db)
             _ = try SyncCheckpointRecord.deleteOne(db, key: accountID.rawValue)
             _ = try QueuedMutationRecord.filter(Column("accountID") == accountID.rawValue).deleteAll(db)
+
+            let localDraftRows = try Row.fetchAll(db, sql: "SELECT id, draftJSON FROM localDrafts")
+            for row in localDraftRows {
+                guard let draftID = row["id"] as? String,
+                      let draftJSON = row["draftJSON"] as? String,
+                      let draft = try? decoder.decode(OutgoingDraft.self, from: Data(draftJSON.utf8)),
+                      draft.accountID == accountID else {
+                    continue
+                }
+                try db.execute(sql: "DELETE FROM localDrafts WHERE id = ?", arguments: [draftID])
+            }
         }
     }
 }

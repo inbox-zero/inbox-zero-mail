@@ -37,9 +37,44 @@ enum MessageDetailTimestampFormatter {
     }
 }
 
-private extension View {
+extension View {
     func plainButtonHitArea() -> some View {
         contentShape(Rectangle())
+    }
+
+    func accountDisconnectConfirmation(
+        account: Binding<MailAccount?>,
+        onDisconnect: @escaping (MailAccountID) -> Void
+    ) -> some View {
+        modifier(AccountDisconnectConfirmationModifier(pendingAccount: account, onDisconnect: onDisconnect))
+    }
+}
+
+private struct AccountDisconnectConfirmationModifier: ViewModifier {
+    @Binding var pendingAccount: MailAccount?
+    let onDisconnect: (MailAccountID) -> Void
+
+    func body(content: Content) -> some View {
+        content.alert(
+            "Disconnect Account?",
+            isPresented: Binding(
+                get: { pendingAccount != nil },
+                set: { isPresented in
+                    if isPresented == false {
+                        pendingAccount = nil
+                    }
+                }
+            ),
+            presenting: pendingAccount
+        ) { account in
+            Button("Disconnect", role: .destructive) {
+                pendingAccount = nil
+                onDisconnect(account.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { account in
+            Text("Cached mail and local drafts for \(account.primaryEmail) will be removed from this Mac. Messages in your mail account will not be deleted.")
+        }
     }
 }
 
@@ -1409,6 +1444,7 @@ private extension String {
 private struct SidebarView: View {
     @Bindable var model: WindowModel
     @State private var expandedLabelAccounts: Set<String> = []
+    @State private var accountPendingDisconnect: MailAccount?
     @AppStorage(AppPreferences.accountAvatarColorsVersionKey) private var avatarSettingsVersion = 0
     @AppStorage(AppPreferences.splitInboxTabsVersionKey) private var splitInboxTabsVersion = 0
 
@@ -1520,6 +1556,9 @@ private struct SidebarView: View {
                             }
                             .buttonStyle(.plain)
                             .focusable(false)
+                            .contextMenu {
+                                accountContextMenu(for: account)
+                            }
 
                             // Per-account mailbox tree when this account is selected
                             if model.selectedAccountID == account.id {
@@ -1718,6 +1757,9 @@ private struct SidebarView: View {
             .padding(8)
         }
         .scrollIndicators(.hidden)
+        .accountDisconnectConfirmation(account: $accountPendingDisconnect) { accountID in
+            model.disconnect(accountID: accountID)
+        }
     }
 
     private func iconForTab(_ tab: UnifiedTab) -> String {
@@ -1743,6 +1785,26 @@ private struct SidebarView: View {
             return description
         }
         return "Sync failed"
+    }
+
+    @ViewBuilder
+    private func accountContextMenu(for account: MailAccount) -> some View {
+        if account.syncState.requiresReconnect {
+            Button {
+                model.reconnect(accountID: account.id)
+            } label: {
+                Label("Sign In Again", systemImage: "arrow.clockwise")
+            }
+            .disabled(model.isConnectingAccount)
+
+            Divider()
+        }
+
+        Button(role: .destructive) {
+            accountPendingDisconnect = account
+        } label: {
+            Label("Disconnect Account", systemImage: "person.crop.circle.badge.xmark")
+        }
     }
 
     @ViewBuilder
