@@ -91,6 +91,37 @@ jobs:
             SPARKLE_APPCAST_URL="$SPARKLE_APPCAST_URL" \
             SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY"
 
+      - name: Validate Sparkle sandbox update support
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_path="$RUNNER_TEMP/${XCODE_SCHEME}.xcarchive"
+          app_path="$archive_path/Products/Applications/${APP_BUNDLE_NAME}.app"
+          info_plist="$app_path/Contents/Info.plist"
+          entitlements_plist="$RUNNER_TEMP/${XCODE_SCHEME}-entitlements.plist"
+
+          installer_service="$(/usr/libexec/PlistBuddy -c 'Print :SUEnableInstallerLauncherService' "$info_plist" 2>/dev/null || true)"
+          if [[ "$installer_service" != "true" ]]; then
+            echo "Missing SUEnableInstallerLauncherService=true in $info_plist"
+            exit 1
+          fi
+
+          bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")"
+          /usr/bin/codesign -d --entitlements :- "$app_path" > "$entitlements_plist" 2>/dev/null
+          mach_lookup="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :com.apple.security.temporary-exception.mach-lookup.global-name' \
+              "$entitlements_plist" 2>/dev/null || true
+          )"
+
+          for mach_name in "${bundle_identifier}-spks" "${bundle_identifier}-spki"; do
+            if ! grep -Fq -- "$mach_name" <<< "$mach_lookup"; then
+              echo "Missing Sparkle mach-lookup entitlement: $mach_name"
+              echo "$mach_lookup"
+              exit 1
+            fi
+          done
+
       - name: Notarize and package app
         shell: bash
         env:

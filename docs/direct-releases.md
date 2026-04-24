@@ -85,11 +85,20 @@ The `Direct Release` workflow will:
 
 - archive the app
 - sign it with your Developer ID certificate
+- verify Sparkle's sandbox installer plist key and mach-lookup entitlements
 - notarize it
 - staple the notarization ticket
 - upload the zipped app to GitHub Releases
 - generate a Sparkle `appcast.xml`
 - publish `appcast.xml` and release note files to `gh-pages`
+
+## Broken updater recovery
+
+Versions 0.1.0 through 0.1.2 shipped without Sparkle's sandbox installer
+configuration in the signed release artifact. Those builds can detect an update
+but cannot launch the installer. Users on those versions need to download the
+latest release and replace the app manually once; subsequent direct-download
+releases can update through Sparkle.
 
 ## Feed URL
 
