@@ -48,39 +48,48 @@ struct MailAppCommands: Commands {
             Button("Command Palette") {
                 activeWindow?.openCommandPalette()
             }
-            .keyboardShortcut("k", modifiers: [.command])
+            .mailKeyboardShortcut(MailCommandShortcuts.commandPalette)
+
+            Button(activeWindow?.isAssistantSidebarVisible == true ? "Hide Assistant Sidebar" : "Show Assistant Sidebar") {
+                activeWindow?.toggleAssistantSidebar()
+            }
+            .mailKeyboardShortcut(MailCommandShortcuts.assistantSidebar)
+
+            Button("Open Assistant Terminal") {
+                activeWindow?.selectAssistantSidebarMode(.terminal)
+            }
 
             Divider()
 
             Button("Refresh Inbox") {
                 activeWindow?.refresh()
             }
-            .keyboardShortcut("r", modifiers: [.command])
+            .mailKeyboardShortcut(MailCommandShortcuts.refresh)
 
             Button("Compose") {
                 activeWindow?.openCompose()
             }
-            .keyboardShortcut("c", modifiers: [])
+            .mailKeyboardShortcut(MailCommandShortcuts.compose)
 
             Button(activeWindow?.selectedThread?.isInInbox == false ? "Unarchive Thread" : "Archive Thread") {
                 activeWindow?.toggleArchiveSelection()
             }
-            .keyboardShortcut("e", modifiers: [])
+            .mailKeyboardShortcut(MailCommandShortcuts.archive)
 
             Button("Toggle Read") {
                 activeWindow?.toggleReadSelection()
             }
-            .keyboardShortcut("u", modifiers: [.shift])
+            .mailKeyboardShortcut(MailCommandShortcuts.toggleRead)
 
             Button("Toggle Star") {
                 activeWindow?.toggleStarSelection()
             }
-            .keyboardShortcut("s", modifiers: [])
+            .mailKeyboardShortcut(MailCommandShortcuts.toggleStar)
 
             Button(activeWindow?.selectedThreadSnoozeActionTitle ?? "Snooze Thread…") {
                 activeWindow?.performPrimarySnoozeAction()
             }
-            .keyboardShortcut("h", modifiers: [])
+            .mailKeyboardShortcut(MailCommandShortcuts.snooze)
 
         }
     }

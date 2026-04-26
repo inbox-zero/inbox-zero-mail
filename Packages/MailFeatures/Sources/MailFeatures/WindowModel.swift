@@ -25,6 +25,42 @@ public enum ComposeMode: Sendable, Equatable {
     case fullscreen // Takes over detail pane
 }
 
+public enum AssistantSidebarMode: String, CaseIterable, Sendable, Equatable, Identifiable {
+    case agent
+    case terminal
+
+    public var id: String { rawValue }
+}
+
+public struct AssistantTerminalConfiguration: Sendable, Equatable {
+    public var executable: String
+    public var arguments: [String]
+    public var currentDirectory: String
+    public var environment: [String: String]
+
+    public init(
+        executable: String = "/bin/zsh",
+        arguments: [String] = ["-l"],
+        currentDirectory: String = FileManager.default.homeDirectoryForCurrentUser.path,
+        environment: [String: String] = AssistantTerminalConfiguration.defaultEnvironment()
+    ) {
+        self.executable = executable
+        self.arguments = arguments
+        self.currentDirectory = currentDirectory
+        self.environment = environment
+    }
+
+    public static func defaultEnvironment(
+        base: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment = base
+        environment["SHELL"] = environment["SHELL"] ?? "/bin/zsh"
+        environment["TERM"] = "xterm-256color"
+        environment["COLORTERM"] = "truecolor"
+        return environment
+    }
+}
+
 private struct ThreadListStateSnapshot {
     let threads: [MailThread]
     let hoveredThreadID: MailThreadID?
@@ -50,6 +86,9 @@ public final class WindowModel {
     public private(set) var selectedThreadDetail: MailThreadDetail?
     public var isThreadOpen = false
     public var isSidebarVisible = false
+    public var isAssistantSidebarVisible = false
+    public var assistantSidebarMode: AssistantSidebarMode = .agent
+    public var assistantTerminal = AssistantTerminalConfiguration()
     public var layoutMode: LayoutMode = .focus
     public var hoveredThreadID: MailThreadID?
     public var hoverScrollGeneration = 0
@@ -89,6 +128,10 @@ public final class WindowModel {
     // MARK: - Compose Helpers
 
     public var isComposeActive: Bool { composeMode != nil }
+
+    public var shouldStartAssistantTerminal: Bool {
+        isAssistantSidebarVisible && assistantSidebarMode == .terminal
+    }
 
     public var isComposePresented: Bool {
         get { composeMode != nil }
@@ -300,6 +343,19 @@ public final class WindowModel {
 
     public func toggleSidebar() {
         isSidebarVisible.toggle()
+    }
+
+    public func toggleAssistantSidebar() {
+        isAssistantSidebarVisible.toggle()
+    }
+
+    public func closeAssistantSidebar() {
+        isAssistantSidebarVisible = false
+    }
+
+    public func selectAssistantSidebarMode(_ mode: AssistantSidebarMode) {
+        assistantSidebarMode = mode
+        isAssistantSidebarVisible = true
     }
 
     public func setSplitInboxItems(_ items: [SplitInboxItem]) {

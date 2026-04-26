@@ -180,6 +180,60 @@ func startLoadsCachedAccountsBeforeInitialRefreshCompletes() async throws {
 
 @Test
 @MainActor
+func assistantSidebarStartsClosedInAgentMode() {
+    let model = makeWindowModel(workspace: StubWorkspace(accounts: [], threads: [], detail: nil))
+
+    #expect(model.isAssistantSidebarVisible == false)
+    #expect(model.assistantSidebarMode == .agent)
+}
+
+@Test
+@MainActor
+func assistantTerminalDefaultsToInteractiveZshInTheHomeDirectory() {
+    let model = makeWindowModel(workspace: StubWorkspace(accounts: [], threads: [], detail: nil))
+
+    #expect(model.assistantTerminal.executable == "/bin/zsh")
+    #expect(model.assistantTerminal.arguments == ["-l"])
+    #expect(model.assistantTerminal.currentDirectory == FileManager.default.homeDirectoryForCurrentUser.path)
+    #expect(model.assistantTerminal.environment["TERM"] == "xterm-256color")
+}
+
+@Test
+@MainActor
+func selectingAssistantTerminalModeMarksTerminalAsReadyToStart() {
+    let model = makeWindowModel(workspace: StubWorkspace(accounts: [], threads: [], detail: nil))
+
+    model.selectAssistantSidebarMode(.terminal)
+
+    #expect(model.shouldStartAssistantTerminal == true)
+}
+
+@Test
+@MainActor
+func selectingAssistantTerminalModeOpensSidebar() {
+    let model = makeWindowModel(workspace: StubWorkspace(accounts: [], threads: [], detail: nil))
+
+    model.selectAssistantSidebarMode(.terminal)
+
+    #expect(model.isAssistantSidebarVisible == true)
+    #expect(model.assistantSidebarMode == .terminal)
+}
+
+@Test
+@MainActor
+func togglingAssistantSidebarPreservesSelectedMode() {
+    let model = makeWindowModel(workspace: StubWorkspace(accounts: [], threads: [], detail: nil))
+    model.selectAssistantSidebarMode(.terminal)
+
+    model.toggleAssistantSidebar()
+    model.toggleAssistantSidebar()
+
+    #expect(model.isAssistantSidebarVisible == true)
+    #expect(model.assistantSidebarMode == .terminal)
+}
+
+@Test
+@MainActor
 func newComposeDefaultsToNewReplyMode() {
     let model = makeWindowModel(workspace: StubWorkspace(accounts: [], threads: [], detail: nil))
     model.openCompose()
