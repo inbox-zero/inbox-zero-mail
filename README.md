@@ -88,8 +88,10 @@ Inbox Zero Mail talks directly to the Gmail (and soon Microsoft) APIs. Your mail
 The one exception is remote images. By default, image requests are routed through `img.getinboxzero.com` so that senders can't learn your IP or other client details just from you opening their email. You have three options:
 
 - **Use the default proxy** (recommended for most users) -- zero setup.
-- **Run your own proxy** -- the proxy is open source and runs for free on Cloudflare Workers. See the [main Inbox Zero repo](https://getinboxzero.com/github), then enter your proxy URL in Settings > General > Privacy. Developers can also set `INBOX_ZERO_IMAGE_PROXY_BASE_URL`.
-- **Turn it off** -- set `INBOX_ZERO_IMAGE_PROXY_BASE_URL=off`, or disable remote images in Settings.
+- **Use your own proxy** -- enter your proxy URL in Settings > General > Privacy. The proxy is open source and runs for free on Cloudflare Workers; see the [main Inbox Zero repo](https://getinboxzero.com/github) to host one.
+- **Turn it off** -- disable remote images in Settings.
+
+Developers can set `INBOX_ZERO_IMAGE_PROXY_BASE_URL` to configure the default proxy URL for local or custom builds, or set it to `off` to disable proxying in that build.
 
 ## Architecture
 
