@@ -25,20 +25,24 @@ public struct LabelChip: View {
     private let text: String
     private let bgHex: String?
     private let textHex: String?
+    private let maxWidth: CGFloat?
 
-    public init(text: String, bgHex: String? = nil, textHex: String? = nil) {
+    public init(text: String, bgHex: String? = nil, textHex: String? = nil, maxWidth: CGFloat? = nil) {
         self.text = text
         self.bgHex = bgHex
         self.textHex = textHex
+        self.maxWidth = maxWidth
     }
 
     public var body: some View {
         Text(text)
             .font(.system(size: 10, weight: .semibold))
             .lineLimit(1)
+            .truncationMode(.tail)
             .foregroundStyle(textHex.map { Color(hex: $0) } ?? MailDesignTokens.textSecondary)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
+            .frame(maxWidth: maxWidth, alignment: .leading)
             .background(bgHex.map { Color(hex: $0) } ?? MailDesignTokens.chipBackground)
             .clipShape(Capsule())
     }
@@ -156,6 +160,7 @@ public struct ThreadRowView: View, Equatable {
                 .font(.system(size: metrics.participantFontSize, weight: thread.hasUnread ? .semibold : .regular))
                 .foregroundStyle(MailDesignTokens.textPrimary)
                 .lineLimit(1)
+                .truncationMode(.tail)
                 .frame(width: metrics.participantWidth, alignment: .leading)
 
             // Labels (user-visible only)
@@ -164,17 +169,23 @@ public struct ThreadRowView: View, Equatable {
             }
             if !visibleLabels.isEmpty {
                 HStack(spacing: 3) {
-                    ForEach(visibleLabels.prefix(3), id: \.id) { label in
-                        LabelChip(text: label.displayName, bgHex: label.colorHex, textHex: label.textColorHex)
+                    ForEach(visibleLabels.prefix(metrics.maxVisibleLabels), id: \.id) { label in
+                        LabelChip(
+                            text: label.displayName,
+                            bgHex: label.colorHex,
+                            textHex: label.textColorHex,
+                            maxWidth: metrics.labelChipMaxWidth
+                        )
                     }
-                    if visibleLabels.count > 3 {
-                        Text("+\(visibleLabels.count - 3)")
+                    if visibleLabels.count > metrics.maxVisibleLabels {
+                        Text("+\(visibleLabels.count - metrics.maxVisibleLabels)")
                             .font(.system(size: metrics.labelOverflowFontSize, weight: .medium))
                             .foregroundStyle(MailDesignTokens.textTertiary)
                     }
                 }
-                .padding(.leading, metrics.labelsHorizontalPadding)
-                .padding(.trailing, metrics.labelsHorizontalPadding)
+                .frame(width: metrics.labelsMaxWidth, alignment: .leading)
+                .padding(.trailing, metrics.labelsTrailingPadding)
+                .clipped()
             }
 
             // Subject + snippet
@@ -193,6 +204,7 @@ public struct ThreadRowView: View, Equatable {
                     .foregroundStyle(MailDesignTokens.textSecondary)
                     .lineLimit(1)
             }
+            .layoutPriority(1)
 
             Spacer(minLength: metrics.trailingSpacerMinimum)
 
@@ -202,6 +214,7 @@ public struct ThreadRowView: View, Equatable {
                     .font(.system(size: metrics.statusIconFontSize))
                     .foregroundStyle(.orange)
                     .padding(.trailing, metrics.statusIconTrailingPadding)
+                    .fixedSize()
             }
 
             // Attachment indicator
@@ -216,12 +229,15 @@ public struct ThreadRowView: View, Equatable {
                 }
                 .foregroundStyle(MailDesignTokens.textTertiary)
                 .padding(.trailing, metrics.attachmentTrailingPadding)
+                .fixedSize()
             }
 
             // Time
             Text(relativeTime(thread.lastActivityAt))
                 .font(.system(size: metrics.timeFontSize).monospacedDigit())
                 .foregroundStyle(thread.hasUnread ? MailDesignTokens.textPrimary : MailDesignTokens.textSecondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
 
             // Account avatar (All view only)
             if let avatar = accountAvatar {
@@ -258,8 +274,11 @@ public struct ThreadRowView: View, Equatable {
         let starTrailingPadding: CGFloat
         let participantFontSize: CGFloat
         let participantWidth: CGFloat
-        let labelsHorizontalPadding: CGFloat
+        let labelsMaxWidth: CGFloat
+        let labelsTrailingPadding: CGFloat
+        let labelChipMaxWidth: CGFloat
         let labelOverflowFontSize: CGFloat
+        let maxVisibleLabels: Int
         let subjectSnippetSpacing: CGFloat
         let subjectFontSize: CGFloat
         let separatorFontSize: CGFloat
@@ -287,8 +306,11 @@ public struct ThreadRowView: View, Equatable {
                 starTrailingPadding = 10
                 participantFontSize = 13
                 participantWidth = 160
-                labelsHorizontalPadding = 8
+                labelsMaxWidth = 128
+                labelsTrailingPadding = 8
+                labelChipMaxWidth = 58
                 labelOverflowFontSize = 9
+                maxVisibleLabels = 2
                 subjectSnippetSpacing = 6
                 subjectFontSize = 13
                 separatorFontSize = 12
@@ -313,8 +335,11 @@ public struct ThreadRowView: View, Equatable {
                 starTrailingPadding = 12
                 participantFontSize = 14
                 participantWidth = 174
-                labelsHorizontalPadding = 10
+                labelsMaxWidth = 154
+                labelsTrailingPadding = 10
+                labelChipMaxWidth = 68
                 labelOverflowFontSize = 10
+                maxVisibleLabels = 2
                 subjectSnippetSpacing = 7
                 subjectFontSize = 14
                 separatorFontSize = 13
