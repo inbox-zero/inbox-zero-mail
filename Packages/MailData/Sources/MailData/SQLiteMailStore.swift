@@ -336,12 +336,14 @@ public actor SQLiteMailStore: MailStore {
 
     public func seedDemoDataIfNeeded() async throws {
         let now = Date()
-        let accounts = DemoDataFactory.makeAccounts()
+        let accounts = try DemoDataFactory.makeAccounts()
         for account in accounts {
             try await saveAccount(account)
         }
-        try await saveMailboxes(DemoDataFactory.makeMailboxes(for: accounts))
-        try await upsertThreadDetails(DemoDataFactory.makeThreads(for: accounts, now: now), checkpoint: nil)
+        let mailboxes = try DemoDataFactory.makeMailboxes(for: accounts)
+        let threads = try DemoDataFactory.makeThreads(for: accounts, now: now)
+        try await saveMailboxes(mailboxes)
+        try await upsertThreadDetails(threads, checkpoint: nil)
     }
 
     public func removeAccount(accountID: MailAccountID) async throws {

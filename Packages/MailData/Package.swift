@@ -25,6 +25,9 @@ let package = Package(
                 "MailCore",
                 "ProviderCore",
                 .product(name: "GRDB", package: "GRDB.swift"),
+            ],
+            resources: [
+                .process("Resources"),
             ]
         ),
         .testTarget(
