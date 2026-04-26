@@ -19,103 +19,195 @@ google:
       name: Ops/Review
       color_background: "#DDEEFF"
       color_text: "#111111"
-    - id: Label_vip
+    - id: Label_customers
+      user_email: alpha.inbox@example.com
+      name: Customers
+      color_background: "#E0F7EC"
+      color_text: "#0F3D2E"
+    - id: Label_newsletters
+      user_email: alpha.inbox@example.com
+      name: Newsletters
+      color_background: "#F3E8FF"
+      color_text: "#3D2463"
+    - id: Label_marketing
+      user_email: alpha.inbox@example.com
+      name: Marketing
+      color_background: "#FFE8D6"
+      color_text: "#5A2B0C"
+    - id: Label_receipts
+      user_email: alpha.inbox@example.com
+      name: Receipts
+      color_background: "#E7F0FF"
+      color_text: "#17345C"
+    - id: Label_travel
+      user_email: alpha.inbox@example.com
+      name: Travel
+      color_background: "#FFF7CC"
+      color_text: "#4D3B00"
+    - id: Label_ops
       user_email: beta.inbox@example.com
-      name: VIP
-      color_background: "#FFF0C2"
-      color_text: "#4A3200"
+      name: Ops/Review
+      color_background: "#DDEEFF"
+      color_text: "#111111"
+    - id: Label_customers
+      user_email: beta.inbox@example.com
+      name: Customers
+      color_background: "#E0F7EC"
+      color_text: "#0F3D2E"
+    - id: Label_newsletters
+      user_email: beta.inbox@example.com
+      name: Newsletters
+      color_background: "#F3E8FF"
+      color_text: "#3D2463"
+    - id: Label_marketing
+      user_email: beta.inbox@example.com
+      name: Marketing
+      color_background: "#FFE8D6"
+      color_text: "#5A2B0C"
+    - id: Label_receipts
+      user_email: beta.inbox@example.com
+      name: Receipts
+      color_background: "#E7F0FF"
+      color_text: "#17345C"
+    - id: Label_travel
+      user_email: beta.inbox@example.com
+      name: Travel
+      color_background: "#FFF7CC"
+      color_text: "#4D3B00"
   messages:
     - id: msg_alpha_release
       user_email: alpha.inbox@example.com
       from: ops@example.com
       to: alpha.inbox@example.com
       subject: Release checklist
-      body_text: Archive, star, and reply actions are wired up.
+      body_text: Please confirm archive, star, reply, snooze, and account switching before the screenshot build.
       label_ids: [INBOX, UNREAD, STARRED, Label_ops]
-    - id: msg_alpha_customer
-      user_email: alpha.inbox@example.com
-      from: customer@example.com
-      to: alpha.inbox@example.com
-      subject: Customer follow-up
-      body_text: Please confirm the rollout window.
-      label_ids: [INBOX]
-    - id: msg_alpha_triage
+    - id: msg_alpha_support_escalations
       user_email: alpha.inbox@example.com
       from: support@example.com
       to: alpha.inbox@example.com
       subject: Escalation queue for Monday
-      body_text: There are six customer escalations waiting for triage in the ops queue.
-      label_ids: [INBOX, UNREAD, Label_ops]
+      body_text: Six customer escalations are waiting for triage. Two mention sync delays and three ask about account switching.
+      label_ids: [INBOX, UNREAD, Label_ops, Label_customers]
     - id: msg_alpha_design
       user_email: alpha.inbox@example.com
       from: design@example.com
       to: alpha.inbox@example.com
       subject: List view polish review
       body_text: The new list view needs stronger keyboard focus states before sign-off.
-      label_ids: [INBOX]
+      label_ids: [INBOX, Label_ops]
     - id: msg_alpha_invoice
       user_email: alpha.inbox@example.com
       from: billing@example.com
       to: alpha.inbox@example.com
       subject: April infrastructure invoice
-      body_text: The draft invoice is attached and ready for review.
-      label_ids: [INBOX]
-    - id: msg_alpha_incident
+      body_text: The draft infrastructure invoice is ready for review.
+      label_ids: [INBOX, Label_receipts]
+    - id: msg_alpha_product_digest
       user_email: alpha.inbox@example.com
-      from: alerts@example.com
+      from: digest@example.com
       to: alpha.inbox@example.com
-      subject: Incident retro notes
-      body_text: Root cause and follow-up actions are ready for distribution.
-      label_ids: [INBOX, STARRED, Label_ops]
-    - id: msg_alpha_founder
+      subject: Weekly product digest
+      body_text: This week covers faster search, quieter notifications, and better keyboard navigation.
+      label_ids: [INBOX, Label_newsletters]
+    - id: msg_alpha_launch_assets
       user_email: alpha.inbox@example.com
-      from: founders@example.com
-      to: alpha.inbox@example.com
-      subject: Investor update draft
-      body_text: Can you tighten the product metrics section before tonight.
-      label_ids: [INBOX]
-    - id: msg_beta_ops
-      user_email: beta.inbox@example.com
-      from: founders@example.com
-      to: beta.inbox@example.com
-      subject: Multi-account review
-      body_text: The unified inbox should surface both Gmail accounts together.
-      label_ids: [INBOX, UNREAD, Label_vip]
-    - id: msg_beta_launch
-      user_email: beta.inbox@example.com
       from: marketing@example.com
+      to: alpha.inbox@example.com
+      subject: Screenshot launch assets approved
+      body_text: Final app screenshots, newsletter copy, and launch timing are approved.
+      label_ids: [INBOX, UNREAD, Label_marketing]
+    - id: msg_alpha_travel
+      user_email: alpha.inbox@example.com
+      from: travel@example.com
+      to: alpha.inbox@example.com
+      subject: Board meeting travel receipt
+      body_text: Your receipt and itinerary for the board meeting trip are attached for reimbursement.
+      label_ids: [INBOX, Label_travel, Label_receipts]
+    - id: msg_alpha_customer
+      user_email: alpha.inbox@example.com
+      from: customer@example.com
+      to: alpha.inbox@example.com
+      subject: Customer rollout window
+      body_text: Please confirm the rollout window, owner list, and rollback contact before tomorrow morning.
+      label_ids: [INBOX, Label_customers]
+    - id: msg_alpha_renewal
+      user_email: alpha.inbox@example.com
+      from: procurement@example.com
+      to: alpha.inbox@example.com
+      subject: Renewal negotiation notes
+      body_text: Let's revisit the renewal terms after the stakeholder meeting.
+      label_ids: [INBOX, Label_customers]
+    - id: msg_alpha_security_archive
+      user_email: alpha.inbox@example.com
+      from: security@example.com
+      to: alpha.inbox@example.com
+      subject: Security report closed
+      body_text: The quarterly security report is closed with no blocking issues.
+      label_ids: [Label_ops]
+    - id: msg_beta_vip_migration
+      user_email: beta.inbox@example.com
+      from: vip.customer@example.com
       to: beta.inbox@example.com
-      subject: Launch checklist approval
-      body_text: Final copy, screenshots, and announcement timing are ready for approval.
-      label_ids: [INBOX, STARRED]
+      subject: VIP migration timeline
+      body_text: Please send the final migration timeline and owner list.
+      label_ids: [INBOX, UNREAD, STARRED, Label_customers]
     - id: msg_beta_hiring
       user_email: beta.inbox@example.com
       from: recruiting@example.com
       to: beta.inbox@example.com
       subject: Hiring debrief
       body_text: Candidate feedback is in and we need a decision by end of day.
-      label_ids: [INBOX, UNREAD, Label_vip]
-    - id: msg_beta_budget
+      label_ids: [INBOX, UNREAD, Label_ops]
+    - id: msg_beta_investor_update
       user_email: beta.inbox@example.com
-      from: finance@example.com
+      from: founders@example.com
       to: beta.inbox@example.com
-      subject: Budget sign-off needed
-      body_text: The revised cloud budget is ready for review and sign-off.
-      label_ids: [INBOX]
-    - id: msg_beta_customer
+      subject: Investor update draft
+      body_text: Can you tighten the product metrics section before tonight?
+      label_ids: [INBOX, UNREAD, STARRED, Label_marketing]
+    - id: msg_beta_campaign
       user_email: beta.inbox@example.com
-      from: vip.customer@example.com
+      from: growth@example.com
       to: beta.inbox@example.com
-      subject: VIP migration timeline
-      body_text: Please send over the final migration timeline and owner list.
-      label_ids: [INBOX, UNREAD, STARRED, Label_vip]
-    - id: msg_beta_digest
+      subject: Campaign performance snapshot
+      body_text: The screenshot campaign outperformed the benchmark by 18 percent.
+      label_ids: [INBOX, Label_marketing]
+    - id: msg_beta_leadership_digest
       user_email: beta.inbox@example.com
-      from: digest@example.com
+      from: newsletter@example.com
       to: beta.inbox@example.com
-      subject: Weekly product digest
-      body_text: Here is the condensed summary of shipped work, blockers, and open questions.
-      label_ids: [INBOX]
+      subject: Engineering leadership digest
+      body_text: Decision logs, product strategy notes, and hiring benchmarks for the week.
+      label_ids: [INBOX, Label_newsletters]
+    - id: msg_beta_figma_receipt
+      user_email: beta.inbox@example.com
+      from: billing@figma.example.com
+      to: beta.inbox@example.com
+      subject: Figma invoice for April
+      body_text: Your Figma invoice for April is available.
+      label_ids: [INBOX, Label_receipts]
+    - id: msg_beta_community
+      user_email: beta.inbox@example.com
+      from: community@example.com
+      to: beta.inbox@example.com
+      subject: "Community mention: keyboard shortcuts"
+      body_text: A customer thread called out the new keyboard shortcuts and asked about account switching.
+      label_ids: [INBOX, Label_customers]
+    - id: msg_beta_board_packet
+      user_email: beta.inbox@example.com
+      from: board@example.com
+      to: beta.inbox@example.com
+      subject: Board packet edits
+      body_text: The board packet edits can wait until the finance section lands.
+      label_ids: [INBOX, Label_ops]
+    - id: msg_beta_onboarding_archive
+      user_email: beta.inbox@example.com
+      from: people@example.com
+      to: beta.inbox@example.com
+      subject: Onboarding checklist completed
+      body_text: Device setup, policy review, and manager syncs are all marked done.
+      label_ids: [Label_ops]
 
 microsoft:
   users:
@@ -133,16 +225,15 @@ microsoft:
   categories:
     - display_name: Follow Up
       color: preset4
+    - display_name: Legal
+      color: preset5
+    - display_name: Product
+      color: preset6
+    - display_name: Finance
+      color: preset7
+    - display_name: Newsletters
+      color: preset8
   messages:
-    - user_email: gamma.outlook@example.com
-      from:
-        address: alerts@example.com
-        name: Alerts
-      to_recipients:
-        - address: gamma.outlook@example.com
-      subject: Microsoft follow up
-      body_content: "<p>Outlook folder/category mapping is ready.</p>"
-      parent_folder_id: inbox
     - user_email: gamma.outlook@example.com
       from:
         address: legal@example.com
@@ -170,3 +261,48 @@ microsoft:
       subject: Outlook parity review
       body_content: "<p>We need a final pass on Outlook parity before the next demo.</p>"
       parent_folder_id: inbox
+    - user_email: gamma.outlook@example.com
+      from:
+        address: finance@example.com
+        name: Finance
+      to_recipients:
+        - address: gamma.outlook@example.com
+      subject: Finance export ready
+      body_content: "<p>The revised cloud budget export is ready for review.</p>"
+      parent_folder_id: inbox
+    - user_email: gamma.outlook@example.com
+      from:
+        address: partners@example.com
+        name: Partner Digest
+      to_recipients:
+        - address: gamma.outlook@example.com
+      subject: Microsoft partner newsletter
+      body_content: "<p>Updates on Graph APIs, Teams workflows, and admin consent changes.</p>"
+      parent_folder_id: inbox
+    - user_email: gamma.outlook@example.com
+      from:
+        address: partner@example.com
+        name: Partner Team
+      to_recipients:
+        - address: gamma.outlook@example.com
+      subject: Partner co-sell launch
+      body_content: "<p>The co-sell launch package needs app screenshots and security copy.</p>"
+      parent_folder_id: inbox
+    - user_email: gamma.outlook@example.com
+      from:
+        address: security@example.com
+        name: Security
+      to_recipients:
+        - address: gamma.outlook@example.com
+      subject: Security alert policy update
+      body_content: "<p>Please approve the updated security alert policy.</p>"
+      parent_folder_id: inbox
+    - user_email: gamma.outlook@example.com
+      from:
+        address: travel@example.com
+        name: Travel Desk
+      to_recipients:
+        - address: gamma.outlook@example.com
+      subject: Conference travel completed
+      body_content: "<p>Conference travel is complete and the reimbursement packet was filed.</p>"
+      parent_folder_id: archive

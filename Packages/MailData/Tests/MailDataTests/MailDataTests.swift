@@ -6,13 +6,17 @@ import Testing
 import ProviderCore
 
 @Test
-func demoSeederCreatesTwoAccounts() async throws {
+func demoSeederCreatesDemoAccounts() async throws {
     let (store, _) = try makeStore()
 
     try await store.seedDemoDataIfNeeded()
     let accounts = try await store.listAccounts()
 
-    #expect(accounts.count == 2)
+    #expect(accounts.map(\.primaryEmail) == [
+        "alpha.inbox@example.com",
+        "beta.inbox@example.com",
+        "gamma.outlook@example.com",
+    ])
 }
 
 @Test
@@ -33,8 +37,31 @@ func demoSeederStillAddsThreadsWhenARealAccountAlreadyExists() async throws {
 
     let accounts = try await store.listAccounts()
     let threads = try await store.listThreads(query: ThreadListQuery(tab: .all))
-    #expect(accounts.count == 3)
-    #expect(threads.count == 2)
+    #expect(accounts.count == 4)
+    #expect(threads.count >= 20)
+}
+
+@Test
+func demoSeederCreatesMixedMailTypes() async throws {
+    let (store, _) = try makeStore()
+
+    try await store.seedDemoDataIfNeeded()
+
+    let accounts = try await store.listAccounts()
+    let mailboxes = try await store.listMailboxes(accountID: nil)
+    let inboxThreads = try await store.listThreads(query: ThreadListQuery(tab: .all))
+    let snoozedThreads = try await store.listThreads(query: ThreadListQuery(tab: .snoozed))
+    let allMailThreads = try await store.listThreads(query: ThreadListQuery(tab: .all, mailboxScope: .allMail))
+
+    #expect(accounts.contains(where: { $0.providerKind == .microsoft }))
+    #expect(mailboxes.contains(where: { $0.displayName == "Newsletters" }))
+    #expect(mailboxes.contains(where: { $0.displayName == "Marketing" }))
+    #expect(mailboxes.contains(where: { $0.kind == .category && $0.displayName == "Legal" }))
+    #expect(inboxThreads.contains(where: { $0.attachmentCount > 0 }))
+    #expect(inboxThreads.contains(where: { $0.hasUnread }))
+    #expect(inboxThreads.contains(where: { $0.isStarred }))
+    #expect(snoozedThreads.count == 2)
+    #expect(allMailThreads.count > inboxThreads.count)
 }
 
 @Test
@@ -103,9 +130,10 @@ func unifiedInboxSortsAcrossAccountsByLatestActivity() async throws {
     try await store.seedDemoDataIfNeeded()
     let threads = try await store.listThreads(query: ThreadListQuery(tab: .all))
 
-    #expect(threads.map(\.accountID.rawValue) == [
-        "gmail:alpha@example.com",
-        "gmail:beta@example.com",
+    #expect(Array(threads.prefix(3)).map(\.accountID.rawValue) == [
+        "gmail:alpha.inbox@example.com",
+        "gmail:beta.inbox@example.com",
+        "gmail:alpha.inbox@example.com",
     ])
 }
 
