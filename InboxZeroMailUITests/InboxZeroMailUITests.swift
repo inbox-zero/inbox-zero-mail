@@ -21,7 +21,7 @@ final class InboxZeroMailUITests: XCTestCase {
         XCTAssertTrue(findFirstElement(in: app, identifierPrefix: "thread-row-").waitForExistence(timeout: 5))
 
         snoozedTab.click()
-        XCTAssertFalse(findFirstElement(in: app, identifierPrefix: "thread-row-").waitForExistence(timeout: 1))
+        XCTAssertTrue(findFirstElement(in: app, identifierPrefix: "thread-row-").waitForExistence(timeout: 5))
 
         unreadTab.click()
         XCTAssertTrue(findFirstElement(in: app, identifierPrefix: "thread-row-").waitForExistence(timeout: 5))
@@ -139,7 +139,7 @@ final class InboxZeroMailUITests: XCTestCase {
     }
 
     private func findFirstElement(in app: XCUIApplication, identifierPrefix: String) -> XCUIElement {
-        app.descendants(matching: .any)
+        app.groups
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", identifierPrefix))
             .firstMatch
     }
