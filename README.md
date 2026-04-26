@@ -81,6 +81,16 @@ cd inbox-zero-mail
 
 That's it. The script starts a local email emulator, builds the app, and opens it. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development setup, OAuth configuration, and more.
 
+## Privacy
+
+Inbox Zero Mail talks directly to the Gmail (and soon Microsoft) APIs. Your mail does not pass through any Inbox Zero servers.
+
+The one exception is remote images. By default, image requests are routed through `img.getinboxzero.com` so that senders can't learn your IP or other client details just from you opening their email. You have three options:
+
+- **Use the default proxy** (recommended for most users) -- zero setup.
+- **Run your own proxy** -- the proxy is open source and runs for free on Cloudflare Workers. See the [main Inbox Zero repo](https://getinboxzero.com/github), then set `INBOX_ZERO_IMAGE_PROXY_BASE_URL` to your proxy URL.
+- **Turn it off** -- set `INBOX_ZERO_IMAGE_PROXY_BASE_URL=off`, or disable remote images in Settings.
+
 ## Architecture
 
 Inbox Zero Mail is built as a modular Swift package architecture:
