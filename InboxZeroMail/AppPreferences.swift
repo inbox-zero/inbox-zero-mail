@@ -12,6 +12,7 @@ enum AppPreferences {
 
     static let loadRemoteImagesKey = "preferences.loadRemoteImagesAutomatically"
     static let loadRemoteImagesByDefault = true
+    static let imageProxyBaseURLKey = "preferences.imageProxyBaseURL"
 
     static let splitInboxTabsKey = "preferences.splitInboxTabs"
     static let splitInboxItemsKey = "preferences.splitInboxItems"
@@ -106,6 +107,23 @@ enum AppPreferences {
             return defaultThreadRowDensity
         }
         return density
+    }
+
+    static func imageProxyBaseURL(defaults: UserDefaults = .standard) -> String? {
+        guard let value = defaults.string(forKey: imageProxyBaseURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              value.isEmpty == false else {
+            return nil
+        }
+        return value
+    }
+
+    static func setImageProxyBaseURL(_ rawValue: String?, defaults: UserDefaults = .standard) {
+        guard let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              value.isEmpty == false else {
+            defaults.removeObject(forKey: imageProxyBaseURLKey)
+            return
+        }
+        defaults.set(value, forKey: imageProxyBaseURLKey)
     }
 
     static func configuredSplitInboxItems(defaults: UserDefaults = .standard) -> [SplitInboxItem] {

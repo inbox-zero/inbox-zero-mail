@@ -295,6 +295,42 @@ struct InboxZeroMailTests {
     }
 
     @Test
+    func imageProxyConfigurationPrefersUserProxyPreference() {
+        let suiteName = "ImageProxyConfigurationPrefersUserProxyPreference.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        AppPreferences.setImageProxyBaseURL(" user-proxy.example.com ", defaults: defaults)
+
+        let configuration = try! #require(ImageProxyConfiguration.resolve(
+            environment: [
+                "INBOX_ZERO_IMAGE_PROXY_BASE_URL": "https://env-proxy.example.com/proxy",
+            ],
+            userDefaults: defaults
+        ))
+
+        #expect(configuration.baseURL == URL(string: "https://user-proxy.example.com/proxy")!)
+    }
+
+    @Test
+    func imageProxyConfigurationFallsBackWhenUserProxyPreferenceIsInvalid() {
+        let suiteName = "ImageProxyConfigurationFallsBackWhenUserProxyPreferenceIsInvalid.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        AppPreferences.setImageProxyBaseURL("ftp://img.example.com/proxy", defaults: defaults)
+
+        let configuration = try! #require(ImageProxyConfiguration.resolve(
+            environment: [
+                "INBOX_ZERO_IMAGE_PROXY_BASE_URL": "https://fallback.example.com/proxy",
+            ],
+            userDefaults: defaults
+        ))
+
+        #expect(configuration.baseURL == URL(string: "https://fallback.example.com/proxy")!)
+    }
+
+    @Test
     func imageProxyConfigurationBuildsSignedProxyURLsThatMatchWebAppContract() {
         let configuration = try! #require(ImageProxyConfiguration.normalized(
             from: "https://img.example.com/proxy",

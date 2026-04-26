@@ -244,6 +244,8 @@ private struct AppSettingsView: View {
     @State private var selectedPane: SettingsPane = .general
     @AppStorage(AppPreferences.loadRemoteImagesKey)
     private var loadRemoteImagesAutomatically = AppPreferences.loadRemoteImagesByDefault
+    @AppStorage(AppPreferences.imageProxyBaseURLKey)
+    private var imageProxyBaseURL = ""
     @AppStorage(AppPreferences.threadRowDensityKey)
     private var threadRowDensityRawValue = AppPreferences.defaultThreadRowDensity.rawValue
     @AppStorage(AppPreferences.accountAvatarColorsVersionKey)
@@ -352,6 +354,22 @@ private struct AppSettingsView: View {
         }
     }
 
+    private var trimmedImageProxyBaseURL: String {
+        imageProxyBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var imageProxyFooter: String {
+        guard trimmedImageProxyBaseURL.isEmpty == false else {
+            return "Remote assets can reveal when a message was opened. Inbox Zero's privacy proxy is used by default."
+        }
+
+        guard let configuration = ImageProxyConfiguration.normalized(from: trimmedImageProxyBaseURL) else {
+            return "Enter a valid http or https URL. The default privacy proxy stays active until the URL is valid."
+        }
+
+        return "Remote images will load through \(configuration.origin)."
+    }
+
     var body: some View {
         let _ = avatarSettingsVersion
         let _ = splitInboxTabsVersion
@@ -442,7 +460,7 @@ private struct AppSettingsView: View {
             title: "General",
             subtitle: "Reading, display, and split inbox preferences."
         ) {
-            SettingsSection("Privacy", footer: "Remote assets can reveal when a message was opened.") {
+            SettingsSection("Privacy", footer: imageProxyFooter) {
                 SettingsRow(
                     title: "Load remote images",
                     subtitle: "Show external images in HTML messages automatically."
@@ -450,6 +468,36 @@ private struct AppSettingsView: View {
                     Toggle("Load remote images", isOn: $loadRemoteImagesAutomatically)
                         .labelsHidden()
                         .toggleStyle(.switch)
+                }
+
+                SettingsSeparator()
+
+                SettingsRow(
+                    title: "Image proxy",
+                    subtitle: "Leave blank for the default privacy proxy."
+                ) {
+                    HStack(spacing: 8) {
+                        TextField("img.getinboxzero.com", text: $imageProxyBaseURL)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 260)
+                            .onSubmit {
+                                AppPreferences.setImageProxyBaseURL(imageProxyBaseURL)
+                                imageProxyBaseURL = AppPreferences.imageProxyBaseURL() ?? ""
+                            }
+                            .accessibilityLabel("Image proxy URL")
+
+                        Button {
+                            AppPreferences.setImageProxyBaseURL(nil)
+                            imageProxyBaseURL = ""
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise")
+                                .frame(width: 16, height: 16)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(trimmedImageProxyBaseURL.isEmpty)
+                        .help("Use default proxy")
+                        .accessibilityLabel("Use default proxy")
+                    }
                 }
             }
 

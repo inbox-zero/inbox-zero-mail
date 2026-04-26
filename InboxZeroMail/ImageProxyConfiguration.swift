@@ -23,10 +23,12 @@ struct ImageProxyConfiguration: Equatable {
 
     static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        infoDictionary: [String: Any]? = nil
+        infoDictionary: [String: Any]? = nil,
+        userDefaults: UserDefaults? = nil
     ) -> ImageProxyConfiguration? {
         let bundleInfo = infoDictionary ?? Bundle.main.infoDictionary ?? [:]
-        let rawValue = trimmedEnvironmentValue(
+        let configuredValue = userDefaults.flatMap { AppPreferences.imageProxyBaseURL(defaults: $0) }
+        let fallbackValue = trimmedEnvironmentValue(
             for: "INBOX_ZERO_IMAGE_PROXY_BASE_URL",
             environment: environment
         ) ?? trimmedEnvironmentValue(
@@ -47,6 +49,12 @@ struct ImageProxyConfiguration: Equatable {
             infoDictionary: bundleInfo
         )
 
+        if let configuredValue,
+           let configuration = normalized(from: configuredValue, signingSecret: signingSecret) {
+            return configuration
+        }
+
+        let rawValue = fallbackValue
         if let rawValue {
             if disabledEnvironmentValues.contains(rawValue.lowercased()) {
                 return nil

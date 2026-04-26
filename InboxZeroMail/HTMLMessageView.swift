@@ -323,6 +323,8 @@ struct HTMLMessageView: NSViewRepresentable {
     let allowsRemoteContent: Bool
     let showsQuotedContent: Bool
 
+    @AppStorage(AppPreferences.imageProxyBaseURLKey)
+    private var imageProxyBaseURL = ""
     @Binding var contentHeight: CGFloat
 
     init(
@@ -389,7 +391,8 @@ struct HTMLMessageView: NSViewRepresentable {
     }
 
     private func wrapHTML(_ html: String) -> String {
-        let imageProxy = ImageProxyConfiguration.resolve()
+        let _ = imageProxyBaseURL
+        let imageProxy = ImageProxyConfiguration.resolve(userDefaults: .standard)
         let sanitized = HTMLContentSecurity.sanitizedBody(
             html,
             allowsRemoteContent: allowsRemoteContent,
