@@ -30,6 +30,7 @@ struct InboxZeroMailApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var bootstrap: AppBootstrap
     @State private var hasStartedStore = false
+    @State private var hasRunDebugACP = false
     @StateObject private var updater: AppUpdateController
 
     init() {
@@ -65,6 +66,7 @@ struct InboxZeroMailApp: App {
                         NotificationManager.shared.handleReload(reason: reason, threads: threads)
                     }
                     bootstrap.store.start(seedDemoData: bootstrap.seedDemoData)
+                    runDebugACPIfRequested()
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -75,6 +77,14 @@ struct InboxZeroMailApp: App {
 
         Settings {
             AppSettingsView(store: bootstrap.store)
+        }
+    }
+
+    private func runDebugACPIfRequested() {
+        guard hasRunDebugACP == false, let request = bootstrap.debugACPRequest else { return }
+        hasRunDebugACP = true
+        Task.detached(priority: .utility) {
+            ACPDebugRunner.run(request)
         }
     }
 }

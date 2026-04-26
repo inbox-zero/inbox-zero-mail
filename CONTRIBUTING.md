@@ -118,6 +118,34 @@ But the normal dev path should just be:
 ./tools/dev/run-local.sh
 ```
 
+## Debug ACP launch
+
+For local ACP smoke testing, run the macOS app with a debug prompt. The app owns the ACP session and prints the handshake, provider/model discovery when the agent advertises it, the prompt, and the response to the Xcode/app console:
+
+```bash
+./.build/xcode/Build/Products/Debug/InboxZeroMail.app/Contents/MacOS/InboxZeroMail \
+  --debug-acp-ask "hi to ai"
+```
+
+By default this launches `claude-code-acp` from `PATH`. Use launch arguments to point at another ACP-compatible command:
+
+```bash
+./.build/xcode/Build/Products/Debug/InboxZeroMail.app/Contents/MacOS/InboxZeroMail \
+  --debug-acp-ask "hi to ai" \
+  --debug-acp-agent npx \
+  --debug-acp-agent-arg -y \
+  --debug-acp-agent-arg @zed-industries/claude-code-acp
+```
+
+Useful environment-variable equivalents for Xcode schemes:
+
+- `INBOX_ZERO_DEBUG_ACP_ASK=hi to ai`
+- `INBOX_ZERO_DEBUG_ACP_AGENT=/path/to/agent`
+- `INBOX_ZERO_DEBUG_ACP_AGENT_ARGS="arg1 arg2"`
+- `INBOX_ZERO_DEBUG_ACP_CWD=/absolute/session/path`
+
+This is intentionally debug-only: it is a first app-owned ACP client wrapper, not a production AI compose/reply UI.
+
 ## App Control CLI
 
 The app control plane is disabled by default.
