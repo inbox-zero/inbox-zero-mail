@@ -236,6 +236,15 @@ microsoft:
   messages:
     - user_email: gamma.outlook@example.com
       from:
+        address: alerts@example.com
+        name: Alerts
+      to_recipients:
+        - address: gamma.outlook@example.com
+      subject: Microsoft follow up
+      body_content: "<p>Outlook folder/category mapping is ready.</p>"
+      parent_folder_id: inbox
+    - user_email: gamma.outlook@example.com
+      from:
         address: legal@example.com
         name: Legal
       to_recipients:

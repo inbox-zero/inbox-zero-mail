@@ -81,7 +81,7 @@ func outlookEmulatorContractCoversMailboxSyncAndFlags() async throws {
     #expect(mailboxes.contains(where: { $0.kind == .folder && $0.systemRole == .inbox }))
     #expect(mailboxes.contains(where: { $0.kind == .category && $0.displayName == "Follow Up" }))
 
-    let page = try await provider.syncPage(session: session, accountID: accountID, request: MailSyncRequest(mode: .initial, limit: 10))
+    let page = try await provider.syncPage(session: session, accountID: accountID, request: MailSyncRequest(mode: .initial, limit: 20))
     let thread = try #require(page.threadDetails.first(where: { $0.thread.subject == "Microsoft follow up" }))
 
     #expect(page.profile.emailAddress == "gamma.outlook@example.com")
