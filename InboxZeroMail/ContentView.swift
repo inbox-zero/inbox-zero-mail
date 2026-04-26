@@ -1698,16 +1698,7 @@ private struct SidebarView: View {
                         Button {
                             model.connectAccount(kind: provider)
                         } label: {
-                            SidebarRow {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.system(size: 13))
-                                    Text("Add \(provider.displayName)")
-                                        .font(.system(size: 12, weight: .medium))
-                                }
-                                .foregroundStyle(MailDesignTokens.sidebarMuted)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
+                            sidebarAddAccountLabel("Add \(provider.displayName)")
                         }
                         .buttonStyle(.plain)
                         .focusable(false)
@@ -1720,39 +1711,20 @@ private struct SidebarView: View {
                                 }
                             }
                         } label: {
-                            SidebarRow {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.system(size: 13))
-                                    Text("Add Account")
-                                        .font(.system(size: 12, weight: .medium))
-                                }
-                                .foregroundStyle(MailDesignTokens.sidebarMuted)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
+                            sidebarAddAccountLabel("Add Account")
                         }
                         .menuStyle(.borderlessButton)
                         .menuIndicator(.hidden)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(MailDesignTokens.sidebarMuted)
+                        .tint(MailDesignTokens.sidebarMuted)
                         .focusable(false)
                         .disabled(model.isConnectingAccount)
                     }
                 }
 
                 // Keyboard hint
-                HStack(spacing: 4) {
-                    Text("?")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(MailDesignTokens.sidebarMuted)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .background(MailDesignTokens.sidebarSurface)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                    Text("Shortcuts")
-                        .font(.system(size: 10))
-                        .foregroundStyle(MailDesignTokens.sidebarMuted)
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+                sidebarKeyboardHint
             }
             .padding(8)
         }
@@ -1785,6 +1757,41 @@ private struct SidebarView: View {
             return description
         }
         return "Sync failed"
+    }
+
+    private func sidebarAddAccountLabel(_ title: String) -> some View {
+        SidebarRow {
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 13))
+                    .frame(width: 18)
+
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundStyle(MailDesignTokens.sidebarMuted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .foregroundStyle(MailDesignTokens.sidebarMuted)
+        .tint(MailDesignTokens.sidebarMuted)
+    }
+
+    private var sidebarKeyboardHint: some View {
+        HStack(spacing: 8) {
+            Text("?")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(MailDesignTokens.sidebarMuted)
+                .frame(width: 18, height: 18)
+                .background(MailDesignTokens.sidebarSurface)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+
+            Text("Shortcuts")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MailDesignTokens.sidebarMuted)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .padding(.bottom, 12)
     }
 
     @ViewBuilder
