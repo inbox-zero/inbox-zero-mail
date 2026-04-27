@@ -48,6 +48,7 @@ Most modern email clients are Electron apps that eat 2 GB of RAM just to show yo
 | Key | Action |
 |---|---|
 | <kbd>Cmd</kbd>+<kbd>K</kbd> | Command palette |
+| <kbd>Cmd</kbd>+<kbd>B</kbd> | Toggle sidebar |
 | <kbd>C</kbd> | Compose |
 | <kbd>E</kbd> | Archive / unarchive |
 | <kbd>S</kbd> | Star / unstar |

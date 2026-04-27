@@ -548,7 +548,7 @@ public struct KeyboardShortcutOverlay: View {
         ("Shift+Up/Down", "Extend selection"),
         ("Cmd+A", "Select all"),
         ("/ or Cmd+K", "Search"),
-        ("Cmd+\\", "Toggle sidebar"),
+        ("Cmd+B", "Toggle sidebar"),
         ("?", "Toggle shortcuts"),
         ("Cmd+R", "Refresh"),
     ]

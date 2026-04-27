@@ -94,8 +94,8 @@ private struct KeyMonitorRepresentable: NSViewRepresentable {
 
         guard NSApp.keyWindow?.firstResponder is NSTextView == false else { return event }
 
-        // Cmd+\ toggles sidebar
-        if modifiers.contains(.command), event.charactersIgnoringModifiers == "\\" {
+        // Cmd+B toggles sidebar.
+        if modifiers.contains(.command), event.charactersIgnoringModifiers == "b" {
             model.toggleSidebar()
             return nil
         }

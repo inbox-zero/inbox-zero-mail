@@ -480,7 +480,7 @@ private struct FocusTopBar: View {
                             .foregroundStyle(MailDesignTokens.textSecondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Toggle sidebar (Cmd+\\)")
+                    .help("Toggle sidebar (Cmd+B)")
 
                     if model.isSearchFocused || !model.searchText.isEmpty {
                         // Search bar
@@ -750,7 +750,7 @@ func commandPaletteBaseItems(model: WindowModel) -> [CommandPaletteItem] {
             category: "Actions",
             systemImage: "sidebar.leading",
             searchText: "sidebar navigation toggle",
-            shortcut: .init("\\", modifiers: [.command], display: "⌘\\", requiresEmptyQuery: false)
+            shortcut: .init("b", modifiers: [.command], display: "⌘B", requiresEmptyQuery: false)
         ) {
             model.toggleSidebar()
         },
