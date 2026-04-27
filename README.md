@@ -1,12 +1,14 @@
 # Inbox Zero Mail
 
-**The open-source, native macOS email client.** Built in Swift. Fast, lightweight, and hackable.
+**The open-source, privacy-first, native macOS email client.** Built in Swift for people who want email to feel fast, private, and fully under their control.
 
-<!-- Add a screenshot here: ![Inbox Zero Mail](docs/screenshot.png) -->
+![Inbox Zero Mail inbox](docs/screenshot.png)
 
 ## Why Inbox Zero Mail?
 
-Most modern email clients are Electron apps that eat 2 GB of RAM just to show your inbox. Inbox Zero Mail is a real macOS app, built with SwiftUI, that uses ~100 MB. It's the email client Superhuman should have been -- native, open source, and yours to customize.
+Most modern email clients are Electron apps that can eat 2 GB of RAM just to show your inbox. Inbox Zero Mail is a real macOS app, built with SwiftUI, that typically uses ~100 MB. It launches quickly, scrolls smoothly, and stays out of the way.
+
+It is also yours. The code is open source, the architecture is modular, and the app is easy to hack on: point Claude Code, Codex, or your editor at the repo and change the workflow, UI, shortcuts, or provider behavior to match how you actually handle email.
 
 **Want AI-powered email features?** Check out [getinboxzero.com](https://getinboxzero.com), our companion open-source project for AI triage, auto-responses, and more.
 
@@ -14,13 +16,13 @@ Most modern email clients are Electron apps that eat 2 GB of RAM just to show yo
 
 ## Highlights
 
-- **Open source & hackable** -- fork it, theme it, add features. Build the email client you've always wanted.
-- **Native Swift + SwiftUI** -- ~100 MB of RAM vs. 2 GB for Electron-based alternatives. Instant launch, smooth scrolling, no lag.
-- **Unified multi-account inbox** -- connect 10+ Gmail accounts and view every email in a single stream, or browse each account individually.
-- **Keyboard-first workflow** -- navigate your entire inbox without touching the mouse. Archive, reply, star, snooze -- all from the keyboard.
-- **Command palette** (<kbd>Cmd</kbd>+<kbd>K</kbd>) -- jump to any action, account, or label instantly.
-- **Split inbox** -- organize your inbox into customizable tabs (Unread, Starred, Snoozed, by label, or custom search queries).
-- **Privacy-first** -- remote images are routed through a privacy proxy by default. No tracking pixels.
+- 🛠️ **Open source & hackable** -- fork it, theme it, add features, or ask Claude Code/Codex to make the email client you want.
+- 🔒 **Privacy-first** -- your mail talks directly to Gmail today, with Microsoft/Outlook support coming soon. Remote images are routed through a privacy proxy by default, so senders do not get your IP just because you opened an email.
+- ⚡ **Native Swift + SwiftUI** -- ~100 MB of RAM vs. 2 GB for Electron-based alternatives. Instant launch, smooth scrolling, no lag.
+- 📬 **First-class multi-address support** -- connect multiple Gmail accounts today, with Outlook/Microsoft support coming soon. See every address in one unified view, split inbox tabs, or separate windows.
+- ⌨️ **Keyboard-first workflow** -- navigate your entire inbox without touching the mouse. Archive, reply, star, snooze, switch views, and run actions from the keyboard.
+- 🔎 **Command palette** (<kbd>Cmd</kbd>+<kbd>K</kbd>) -- jump to any action, account, or label instantly.
+- 🗂️ **Split inbox** -- organize your inbox into customizable tabs (Unread, Starred, Snoozed, by label, or custom search queries).
 
 ## Features
 
