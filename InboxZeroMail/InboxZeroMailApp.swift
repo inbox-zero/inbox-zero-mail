@@ -35,6 +35,12 @@ struct InboxZeroMailApp: App {
     @State private var bootstrap: AppBootstrap
     @State private var hasStartedStore = false
     @StateObject private var updater: AppUpdateController
+    @AppStorage(AppPreferences.appearanceKey)
+    private var appearanceRawValue = AppPreferences.defaultAppearance.rawValue
+
+    private var appearance: AppearancePreference {
+        AppearancePreference(rawValue: appearanceRawValue) ?? AppPreferences.defaultAppearance
+    }
 
     init() {
         let bootstrap = AppBootstrap.make()
@@ -73,6 +79,7 @@ struct InboxZeroMailApp: App {
                     }
                     bootstrap.store.start(seedDemoData: bootstrap.seedDemoData)
                 }
+                .preferredColorScheme(appearance.colorScheme)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 920)
@@ -82,6 +89,7 @@ struct InboxZeroMailApp: App {
 
         Settings {
             AppSettingsView(store: bootstrap.store)
+                .preferredColorScheme(appearance.colorScheme)
         }
     }
 }
@@ -255,6 +263,8 @@ private struct AppSettingsView: View {
     private var imageProxyBaseURL = ""
     @AppStorage(AppPreferences.threadRowDensityKey)
     private var threadRowDensityRawValue = AppPreferences.defaultThreadRowDensity.rawValue
+    @AppStorage(AppPreferences.appearanceKey)
+    private var appearanceRawValue = AppPreferences.defaultAppearance.rawValue
     @AppStorage(AppPreferences.accountAvatarColorsVersionKey)
     private var avatarSettingsVersion = 0
     @AppStorage(AppPreferences.splitInboxTabsVersionKey)
@@ -509,6 +519,22 @@ private struct AppSettingsView: View {
             }
 
             SettingsSection("Display", footer: "Comfortable is the default. Compact keeps the thread list tighter.") {
+                SettingsRow(
+                    title: "Appearance",
+                    subtitle: "System follows your Mac's light or dark mode."
+                ) {
+                    Picker("Appearance", selection: $appearanceRawValue) {
+                        ForEach(AppearancePreference.allCases) { preference in
+                            Text(preference.title).tag(preference.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                }
+
+                SettingsSeparator()
+
                 SettingsRow(title: "Message list density") {
                     Picker("Message list density", selection: $threadRowDensityRawValue) {
                         ForEach(ThreadRowDensity.allCases) { density in
@@ -1221,7 +1247,14 @@ private struct WindowChromeConfigurator: NSViewRepresentable {
     private func configure(window: NSWindow?) {
         guard let window else { return }
         window.titleVisibility = .hidden
-        window.backgroundColor = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+        window.backgroundColor = NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .vibrantDark, .accessibilityHighContrastDarkAqua, .accessibilityHighContrastVibrantDark, .aqua]).map {
+                $0 == .darkAqua || $0 == .vibrantDark || $0 == .accessibilityHighContrastDarkAqua || $0 == .accessibilityHighContrastVibrantDark
+            } ?? false
+            return isDark
+                ? NSColor(srgbRed: 0.07, green: 0.08, blue: 0.10, alpha: 1)
+                : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+        }
         window.isMovableByWindowBackground = true
         window.toolbar?.showsBaselineSeparator = false
         if #available(macOS 13.0, *) {
