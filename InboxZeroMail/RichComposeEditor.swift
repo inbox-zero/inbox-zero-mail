@@ -202,7 +202,6 @@ final class RichComposeEditorContainer: NSView, NSTextViewDelegate {
 
         textView.owner = self
         textView.delegate = self
-        textView.translatesAutoresizingMaskIntoConstraints = false
         textView.setAccessibilityIdentifier("compose-body")
         textView.drawsBackground = false
         textView.backgroundColor = .clear
@@ -218,6 +217,15 @@ final class RichComposeEditorContainer: NSView, NSTextViewDelegate {
         textView.textContainerInset = NSSize(width: 0, height: 10)
         textView.font = Self.defaultFont
         textView.typingAttributes = Self.defaultTypingAttributes()
+
+        // NSTextView used as an NSScrollView documentView must size itself via
+        // the autoresizing mask rather than Auto Layout, otherwise the text
+        // view ends up zero-sized and invisible.
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
 
         if let textContainer = textView.textContainer {
             textContainer.widthTracksTextView = true

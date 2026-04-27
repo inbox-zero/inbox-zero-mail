@@ -1145,7 +1145,6 @@ private struct CommandPaletteOverlay: View {
         )
         .shadow(color: .black.opacity(0.18), radius: 24, x: 0, y: 12)
         .padding(.horizontal, 24)
-        .environment(\.colorScheme, .light)
         .background(
             CommandPaletteEventMonitor(
                 isQueryEmpty: trimmedQuery.isEmpty,
@@ -3114,7 +3113,6 @@ private struct SnoozePickerSheet: View {
             }
         }
         .frame(width: 380, height: showCustomDate ? 580 : 340)
-        .preferredColorScheme(.light)
     }
 }
 
