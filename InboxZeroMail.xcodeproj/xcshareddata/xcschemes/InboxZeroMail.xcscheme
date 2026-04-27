@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "47CC6AB72F77A8760009E484"
-               BuildableName = "InboxZeroMail.app"
+               BuildableName = "Inbox Zero.app"
                BlueprintName = "InboxZeroMail"
                ReferencedContainer = "container:InboxZeroMail.xcodeproj">
             </BuildableReference>
@@ -69,7 +69,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "47CC6AB72F77A8760009E484"
-            BuildableName = "InboxZeroMail.app"
+            BuildableName = "Inbox Zero.app"
             BlueprintName = "InboxZeroMail"
             ReferencedContainer = "container:InboxZeroMail.xcodeproj">
          </BuildableReference>
@@ -86,7 +86,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "47CC6AB72F77A8760009E484"
-            BuildableName = "InboxZeroMail.app"
+            BuildableName = "Inbox Zero.app"
             BlueprintName = "InboxZeroMail"
             ReferencedContainer = "container:InboxZeroMail.xcodeproj">
          </BuildableReference>

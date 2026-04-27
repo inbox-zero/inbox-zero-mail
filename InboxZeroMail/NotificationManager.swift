@@ -9,8 +9,13 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationManager()
 
     private var isAuthorized = false
+    private var isForegroundActive = true
     private var knownUnreadThreadIDs: Set<MailThreadID> = []
     private var hasPrimedUnreadBaseline = false
+
+    func setForegroundActive(_ isActive: Bool) {
+        isForegroundActive = isActive
+    }
 
     func requestPermission() {
         let center = UNUserNotificationCenter.current()
@@ -36,11 +41,9 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let newUnread = unreadThreads.filter { knownUnreadThreadIDs.contains($0.id) == false }
         knownUnreadThreadIDs = unreadIDs
 
-        guard reason == .workspaceChange, isAuthorized else { return }
+        guard reason == .workspaceChange, isAuthorized, isForegroundActive == false else { return }
 
-        for thread in newUnread.prefix(3) {
-            scheduleNotification(for: thread)
-        }
+        scheduleNotification(for: Array(newUnread))
     }
 
     /// Update dock badge to reflect current unread count.
@@ -50,16 +53,30 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - Private
 
-    private func scheduleNotification(for thread: MailThread) {
+    private func scheduleNotification(for threads: [MailThread]) {
+        guard threads.isEmpty == false else { return }
+
         let content = UNMutableNotificationContent()
-        content.title = thread.participantSummary
-        content.subtitle = thread.subject
-        content.body = thread.snippet
         content.sound = .default
-        content.userInfo = ["threadID": thread.id.rawValue]
+        let identifier: String
+
+        if threads.count == 1, let thread = threads.first {
+            content.title = thread.participantSummary
+            content.subtitle = thread.subject
+            content.body = thread.snippet
+            content.userInfo = ["threadID": thread.id.rawValue]
+            identifier = "newmail-\(thread.id.rawValue)"
+        } else {
+            let visibleThreads = threads.prefix(3)
+            content.title = "\(threads.count) new emails"
+            content.body = visibleThreads
+                .map { "\($0.participantSummary): \($0.subject)" }
+                .joined(separator: "\n")
+            identifier = "newmail-summary-\(UUID().uuidString)"
+        }
 
         let request = UNNotificationRequest(
-            identifier: "newmail-\(thread.id.rawValue)",
+            identifier: identifier,
             content: content,
             trigger: nil // deliver immediately
         )
@@ -88,13 +105,13 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         completionHandler()
     }
 
-    /// Show notifications even when app is in foreground (banner style).
+    /// Foreground reloads update the dock badge without presenting extra banners.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        completionHandler([])
     }
 }
 

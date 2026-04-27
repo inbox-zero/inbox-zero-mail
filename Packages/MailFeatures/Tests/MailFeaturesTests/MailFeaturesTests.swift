@@ -7,7 +7,7 @@ import Testing
 @testable import MailFeatures
 
 private actor StubWorkspace: MailWorkspace {
-    let threads: [MailThread]
+    private var storedThreads: [MailThread]
     let detail: MailThreadDetail?
     let threadDetails: [MailThreadID: MailThreadDetail]
     let mailboxes: [MailboxRef]
@@ -24,6 +24,7 @@ private actor StubWorkspace: MailWorkspace {
     private var sentDrafts: [OutgoingDraft] = []
     private var savedDrafts: [OutgoingDraft] = []
     private var deletedDraftIDs: [UUID] = []
+    private let appliesMutationsToThreads: Bool
 
     init(
         accounts: [MailAccount],
@@ -36,10 +37,11 @@ private actor StubWorkspace: MailWorkspace {
         attachmentData: [String: Data] = [:],
         threadQueryResults: [ThreadListQuery: [MailThread]] = [:],
         threadCounts: [ThreadListQuery: Int] = [:],
-        startDelayNanoseconds: UInt64 = 0
+        startDelayNanoseconds: UInt64 = 0,
+        appliesMutationsToThreads: Bool = false
     ) {
         self.storedAccounts = accounts
-        self.threads = threads
+        self.storedThreads = threads
         self.detail = detail
         self.threadDetails = threadDetails
         self.mailboxes = mailboxes
@@ -49,6 +51,7 @@ private actor StubWorkspace: MailWorkspace {
         self.threadQueryResults = threadQueryResults
         self.threadCounts = threadCounts
         self.startDelayNanoseconds = startDelayNanoseconds
+        self.appliesMutationsToThreads = appliesMutationsToThreads
     }
 
     func changes() async -> AsyncStream<Int> { AsyncStream { $0.finish() } }
@@ -64,13 +67,27 @@ private actor StubWorkspace: MailWorkspace {
     }
     func listAccounts() async throws -> [MailAccount] { storedAccounts }
     func listThreads(query: ThreadListQuery) async throws -> [MailThread] {
-        threadQueryResults[query] ?? threads
+        if let result = threadQueryResults[query] {
+            return result
+        }
+        return storedThreads.filter { thread in
+            switch query.tab {
+            case .all:
+                return query.mailboxScope == .allMail || thread.isInInbox
+            case .unread:
+                return thread.isInInbox && thread.hasUnread
+            case .starred:
+                return thread.isStarred
+            case .snoozed:
+                return thread.isSnoozed
+            }
+        }
     }
     func countThreads(query: ThreadListQuery) async throws -> Int {
         if let count = threadCounts[query] {
             return count
         }
-        return threadQueryResults[query]?.count ?? threads.count
+        return try await listThreads(query: query).count
     }
     func loadThread(id: MailThreadID) async throws -> MailThreadDetail? {
         if let detail = threadDetails[id] {
@@ -87,6 +104,27 @@ private actor StubWorkspace: MailWorkspace {
         performedMutations.append(mutation)
         if let performError {
             throw performError
+        }
+        guard appliesMutationsToThreads else { return }
+        switch mutation {
+        case let .archive(threadID), let .trash(threadID):
+            updateThread(threadID) { $0.isInInbox = false }
+        case let .unarchive(threadID), let .untrash(threadID):
+            updateThread(threadID) { $0.isInInbox = true }
+        case let .markRead(threadID):
+            updateThread(threadID) { $0.hasUnread = false }
+        case let .markUnread(threadID):
+            updateThread(threadID) { $0.hasUnread = true }
+        case let .star(threadID):
+            updateThread(threadID) { $0.isStarred = true }
+        case let .unstar(threadID):
+            updateThread(threadID) { $0.isStarred = false }
+        case let .snooze(threadID, until):
+            updateThread(threadID) { $0.snoozedUntil = until }
+        case let .unsnooze(threadID):
+            updateThread(threadID) { $0.snoozedUntil = nil }
+        case .applyMailbox, .removeMailbox, .send:
+            break
         }
     }
     func send(_ draft: OutgoingDraft) async throws {
@@ -137,6 +175,15 @@ private actor StubWorkspace: MailWorkspace {
     func recordedDeletedDraftIDs() async -> [UUID] {
         deletedDraftIDs
     }
+
+    func replaceThreads(_ threads: [MailThread]) {
+        storedThreads = threads
+    }
+
+    private func updateThread(_ threadID: MailThreadID, mutate: (inout MailThread) -> Void) {
+        guard let index = storedThreads.firstIndex(where: { $0.id == threadID }) else { return }
+        mutate(&storedThreads[index])
+    }
 }
 
 /// Creates a WindowModel backed by a MailAppStore with the given stub workspace.
@@ -158,6 +205,35 @@ func reloadHydratesAccountsAndThreads() async {
 
     #expect(model.accounts == [account])
     #expect(model.threads == [thread])
+}
+
+@Test
+@MainActor
+func mutationInOneWindowRefreshesOtherRegisteredWindows() async throws {
+    let account = makeAccount()
+    let thread = makeThread(accountID: account.id)
+    let workspace = StubWorkspace(
+        accounts: [account],
+        threads: [thread],
+        detail: nil,
+        appliesMutationsToThreads: true
+    )
+    let store = MailAppStore(workspace: workspace)
+    let firstWindow = WindowModel(store: store)
+    let secondWindow = WindowModel(store: store)
+    store.register(firstWindow)
+    store.register(secondWindow)
+
+    await store.reloadSharedData(reason: .initial)
+    #expect(firstWindow.threads.map(\.id) == [thread.id])
+    #expect(secondWindow.threads.map(\.id) == [thread.id])
+
+    firstWindow.hoveredThreadID = thread.id
+    firstWindow.archiveSelection()
+    try await Task.sleep(for: .milliseconds(50))
+
+    #expect(firstWindow.threads.isEmpty)
+    #expect(secondWindow.threads.isEmpty)
 }
 
 @Test
@@ -1365,6 +1441,52 @@ func selectAllKeepsACurrentSelectionForKeyboardActions() async {
 
     #expect(model.hoveredThreadID == first.id)
     #expect(model.multiSelectedIDs == [first.id, second.id])
+}
+
+@Test
+@MainActor
+func reloadPreservesMultiSelectionWhenNewThreadArrives() async {
+    let account = makeAccount()
+    let first = makeThread(accountID: account.id, providerThreadID: "thread-1", subject: "First")
+    let second = makeThread(accountID: account.id, providerThreadID: "thread-2", subject: "Second")
+    let incoming = makeThread(accountID: account.id, providerThreadID: "thread-3", subject: "Incoming")
+    let workspace = StubWorkspace(accounts: [account], threads: [first, second], detail: nil)
+    let model = makeWindowModel(workspace: workspace)
+
+    await model.store.reloadSharedData(reason: .initial)
+    await model.reloadThreads()
+    model.toggleMultiSelect(threadID: first.id)
+    model.toggleMultiSelect(threadID: second.id)
+    model.hoveredThreadID = second.id
+
+    await workspace.replaceThreads([incoming, first, second])
+    await model.reloadThreads(reason: .workspaceChange)
+
+    #expect(model.threads.map(\.id) == [incoming.id, first.id, second.id])
+    #expect(model.multiSelectedIDs == [first.id, second.id])
+    #expect(model.hoveredThreadID == second.id)
+}
+
+@Test
+@MainActor
+func reloadDropsOnlyMultiSelectedThreadsThatLeaveCurrentView() async {
+    let account = makeAccount()
+    let first = makeThread(accountID: account.id, providerThreadID: "thread-1", subject: "First")
+    let second = makeThread(accountID: account.id, providerThreadID: "thread-2", subject: "Second")
+    let workspace = StubWorkspace(accounts: [account], threads: [first, second], detail: nil)
+    let model = makeWindowModel(workspace: workspace)
+
+    await model.store.reloadSharedData(reason: .initial)
+    await model.reloadThreads()
+    model.toggleMultiSelect(threadID: first.id)
+    model.toggleMultiSelect(threadID: second.id)
+    model.hoveredThreadID = first.id
+
+    await workspace.replaceThreads([second])
+    await model.reloadThreads(reason: .workspaceChange)
+
+    #expect(model.multiSelectedIDs == [second.id])
+    #expect(model.hoveredThreadID == second.id)
 }
 
 @Test

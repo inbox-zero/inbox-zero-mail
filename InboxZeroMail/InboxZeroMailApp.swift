@@ -48,7 +48,9 @@ struct InboxZeroMailApp: App {
             )
                 .background(WindowChromeConfigurator())
                 .onChange(of: scenePhase) { _, newValue in
-                    bootstrap.store.setForegroundActive(newValue == .active)
+                    let isActive = newValue == .active
+                    bootstrap.store.setForegroundActive(isActive)
+                    NotificationManager.shared.setForegroundActive(isActive)
                 }
                 .onOpenURL { url in
                     Task {
@@ -61,6 +63,7 @@ struct InboxZeroMailApp: App {
                     if bootstrap.isUITesting == false {
                         NotificationManager.shared.requestPermission()
                     }
+                    NotificationManager.shared.setForegroundActive(scenePhase == .active)
                     bootstrap.store.onReload = { reason, threads in
                         NotificationManager.shared.handleReload(reason: reason, threads: threads)
                     }

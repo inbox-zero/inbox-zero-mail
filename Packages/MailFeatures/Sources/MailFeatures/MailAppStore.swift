@@ -266,7 +266,13 @@ public final class MailAppStore {
     // MARK: - Workspace Passthrough
 
     func perform(_ mutation: MailMutation) async throws {
-        try await workspace.perform(mutation)
+        do {
+            try await workspace.perform(mutation)
+            await notifyAllWindows(reason: .workspaceChange)
+        } catch {
+            await notifyAllWindows(reason: .workspaceChange)
+            throw error
+        }
     }
 
     func send(_ draft: OutgoingDraft) async throws {

@@ -133,6 +133,7 @@ public final class WindowModel {
     public func reloadThreads(reason: MailReloadReason = .manual) async {
         do {
             threads = try await store.listThreads(query: activeQuery)
+            reconcileThreadListStateAfterReload()
             splitInboxCounts = (try? await loadSplitInboxCounts()) ?? splitInboxCounts
             if let selectedThreadID {
                 if let cached = threadDetailCache[selectedThreadID] {
@@ -1224,6 +1225,41 @@ private extension WindowModel {
             splitInboxQueryText: item.normalizedQueryText,
             limit: 100
         )
+    }
+
+    func reconcileThreadListStateAfterReload() {
+        let visibleIDs = Set(threads.map(\.id))
+
+        if let hoveredThreadID, visibleIDs.contains(hoveredThreadID) == false {
+            self.hoveredThreadID = nil
+        }
+
+        if isMultiSelectActive {
+            multiSelectedIDs.formIntersection(visibleIDs)
+
+            if multiSelectedIDs.isEmpty {
+                multiSelectionAnchorID = nil
+            } else {
+                let firstVisibleSelectedID = threads.first(where: { multiSelectedIDs.contains($0.id) })?.id
+                if hoveredThreadID == nil {
+                    hoveredThreadID = firstVisibleSelectedID
+                }
+
+                let anchorIsStillSelected = multiSelectionAnchorID.map {
+                    visibleIDs.contains($0) && multiSelectedIDs.contains($0)
+                } ?? false
+                if anchorIsStillSelected == false {
+                    multiSelectionAnchorID = firstVisibleSelectedID
+                }
+            }
+        } else if let multiSelectionAnchorID, visibleIDs.contains(multiSelectionAnchorID) == false {
+            self.multiSelectionAnchorID = nil
+        }
+
+        if let selectedThreadID, visibleIDs.contains(selectedThreadID) == false, isThreadOpen == false {
+            self.selectedThreadID = nil
+            selectedThreadDetail = nil
+        }
     }
 
     var selectedThreadAccount: MailAccount? {
