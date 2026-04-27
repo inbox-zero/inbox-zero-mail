@@ -153,6 +153,35 @@ struct InboxZeroMailTests {
     }
 
     @Test
+    @MainActor
+    func commandPaletteIncludesAssistantSidebarActions() {
+        let model = makeWindowModel(workspace: StubWorkspace(accounts: []))
+        let items = commandPaletteBaseItems(model: model)
+
+        #expect(items.contains(where: { $0.id == "action-assistant-sidebar" }))
+        #expect(items.contains(where: { $0.id == "action-assistant-terminal" }))
+    }
+
+    @Test
+    @MainActor
+    func assistantTerminalPaletteActionOpensTerminalMode() throws {
+        let model = makeWindowModel(workspace: StubWorkspace(accounts: []))
+        let items = commandPaletteBaseItems(model: model)
+        let terminalItem = try #require(items.first(where: { $0.id == "action-assistant-terminal" }))
+
+        terminalItem.perform()
+
+        #expect(model.isAssistantSidebarVisible == true)
+        #expect(model.assistantSidebarMode == .terminal)
+    }
+
+    @Test
+    func composeMenuCommandDoesNotUseBareLetterShortcut() {
+        #expect(MailCommandShortcuts.compose == nil)
+        #expect(!MailCommandShortcuts.mailboxMenuShortcuts.contains(where: { !$0.isTextEntrySafe }))
+    }
+
+    @Test
     func productionProviderEndpointsIgnoreEnvironmentOverrides() {
         let configuration = AppBootstrap.providerLaunchConfiguration(
             arguments: [],
