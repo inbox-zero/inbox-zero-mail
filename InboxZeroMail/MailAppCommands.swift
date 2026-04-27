@@ -9,6 +9,7 @@ import AppUpdates
 struct MailAppCommands: Commands {
     let store: MailAppStore
     @ObservedObject var updater: AppUpdateController
+    @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.windowModel) var activeWindow
 
     var body: some Commands {
@@ -39,8 +40,9 @@ struct MailAppCommands: Commands {
 
             Divider()
 
-            Button("Load Demo Data") {
-                activeWindow?.loadDemoInbox()
+            Button("Open Demo Inbox") {
+                store.loadDemoInbox()
+                openWindow(id: MailWindowScene.main)
             }
         }
 

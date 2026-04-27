@@ -24,6 +24,10 @@ extension FocusedValues {
 
 // MARK: - App Entry Point
 
+enum MailWindowScene {
+    static let main = "mail"
+}
+
 @main
 struct InboxZeroMailApp: App {
     @NSApplicationDelegateAdaptor(InboxZeroMailAppDelegate.self) private var appDelegate
@@ -39,7 +43,7 @@ struct InboxZeroMailApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Inbox Zero", id: MailWindowScene.main) {
             WindowRoot(
                 store: bootstrap.store,
                 seedDemoData: bootstrap.seedDemoData,
