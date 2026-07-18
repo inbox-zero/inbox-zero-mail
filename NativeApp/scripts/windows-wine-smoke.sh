@@ -38,10 +38,13 @@ run_native() {
 cd "${APP_DIR}"
 [[ -s zig-out/bin/inbox-zero-mail-native.exe ]] || fail "Windows executable is missing"
 
-wineboot --init >/dev/null 2>&1
-wineserver --wait
+# Wine can return a non-zero status while still completing first-run prefix
+# initialization on a headless runner (for example when optional wine32 is
+# absent). The readiness assertion below is the authoritative launch check.
+wineboot --init >"${APP_LOG}" 2>&1 || true
+wineserver --wait >/dev/null 2>&1 || true
 rm -rf "${AUTOMATION_DIR}"
-wine zig-out/bin/inbox-zero-mail-native.exe >"${APP_LOG}" 2>&1 &
+wine zig-out/bin/inbox-zero-mail-native.exe >>"${APP_LOG}" 2>&1 &
 app_pid=$!
 
 run_native automate wait --timeout-ms 180000 >/dev/null || fail "app did not publish an automation snapshot"

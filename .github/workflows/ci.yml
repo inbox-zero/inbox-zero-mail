@@ -45,7 +45,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y wine xvfb
+          sudo apt-get install -y wine xvfb xauth
 
       - name: Run Win32 client under Wine
         shell: bash
