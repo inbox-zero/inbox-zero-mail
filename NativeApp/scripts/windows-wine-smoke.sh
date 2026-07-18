@@ -70,7 +70,28 @@ run_native automate widget-key mail-canvas / >/dev/null
 run_native automate assert --timeout-ms 5000 'role=textbox name="Search mail".*focused=true' >/dev/null \
   || fail "keyboard shortcut did not focus search"
 
+compose_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=button name="Compose".*/\1/p' "${snapshot}" | head -1)"
+[[ -n "${compose_id}" ]] || fail "compose action was not published"
+run_native automate widget-click mail-canvas "${compose_id}" >/dev/null
+run_native automate assert --timeout-ms 5000 \
+  'window @w[0-9]+ "Compose"' \
+  'role=textbox name="To"' \
+  'role=textbox name="Subject"' \
+  'role=textbox name="Message body"' >/dev/null || fail "compose window did not open"
+
+to_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=textbox name="To".*/\1/p' "${snapshot}" | head -1)"
+subject_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=textbox name="Subject".*/\1/p' "${snapshot}" | head -1)"
+body_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=textbox name="Message body".*/\1/p' "${snapshot}" | head -1)"
+[[ -n "${to_id}" && -n "${subject_id}" && -n "${body_id}" ]] || fail "compose fields were not published"
+run_native automate widget-action compose-canvas "${to_id}" set_text recipient@example.com >/dev/null
+run_native automate widget-action compose-canvas "${subject_id}" set_text "Windows compose smoke" >/dev/null
+run_native automate widget-action compose-canvas "${body_id}" set_text "Native SDK compose is keyboard accessible." >/dev/null
+run_native automate assert --timeout-ms 5000 'role=button name="Send".*enabled=true' >/dev/null \
+  || fail "compose fields did not enable send"
+run_native automate screenshot compose-canvas >/dev/null
+[[ -s "${AUTOMATION_DIR}/screenshot-compose-canvas.png" ]] || fail "compose screenshot is empty"
+
 run_native automate screenshot mail-canvas >/dev/null
 [[ -s "${AUTOMATION_DIR}/screenshot-mail-canvas.png" ]] || fail "screenshot is empty"
 
-echo "Windows Wine smoke passed: Win32 render, account/filter input, keyboard focus, and screenshot."
+echo "Windows Wine smoke passed: Win32 render, account/filter input, keyboard focus, compose input, and screenshots."

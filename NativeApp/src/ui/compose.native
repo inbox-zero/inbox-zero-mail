@@ -1,0 +1,50 @@
+<column grow="1" background="background" label="Email composer">
+  <row padding="14" gap="10" cross="center" background="surface" window-drag="true">
+    <text size="heading" grow="1">{composeTitle}</text>
+    <badge variant="secondary">{composeStatus}</badge>
+    <button size="sm" variant="outline" icon="save" disabled="{composeOperationBusy}" on-press="compose_save_close">Save and close</button>
+  </row>
+  <separator />
+
+  <column grow="1" padding="18" gap="10">
+    <column gap="6">
+      <text size="sm" foreground="text_muted">From</text>
+      <column gap="6" label="Sending account">
+        <for each="composeAccountsView" key="index" as="a">
+          <if test="{a.visible}">
+            <button size="sm" variant="outline" selected="{a.selected}" disabled="{composeAccountLocked or composeOperationBusy}" on-press="compose_select_account:{a.index}">{a.email} | {a.provider_name}</button>
+          </if>
+        </for>
+      </column>
+    </column>
+
+    <row gap="8" cross="center">
+      <text-field text="{composeTo}" placeholder="Recipients separated by commas" label="To" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_to_edit" autofocus="true" grow="1" />
+      <button size="sm" variant="ghost" disabled="{composeOperationBusy or composeContentReadOnly}" on-press="compose_toggle_cc_bcc">Cc/Bcc</button>
+    </row>
+    <if test="{composer.cc_bcc_visible}">
+      <row gap="8">
+        <text-field text="{composeCc}" placeholder="Cc recipients" label="Cc" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_cc_edit" grow="1" />
+        <text-field text="{composeBcc}" placeholder="Bcc recipients" label="Bcc" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_bcc_edit" grow="1" />
+      </row>
+    </if>
+    <text-field text="{composeSubject}" placeholder="Subject" label="Subject" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_subject_edit" />
+    <textarea text="{composeBody}" placeholder="Write your message" label="Message body" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_body_edit" on-submit="compose_send" grow="1" />
+    <if test="{composeContentReadOnly}">
+      <text size="sm" foreground="warning" wrap="true">{composePreservationNotice}</text>
+    </if>
+  </column>
+
+  <separator />
+  <column background="surface">
+    <if test="{composeHasError}">
+      <text padding="14" foreground="destructive" wrap="true">{composeError}</text>
+    </if>
+    <row padding="14" gap="8" cross="center">
+      <text size="sm" foreground="text_muted" grow="1">{composeStatus}</text>
+      <button size="sm" variant="ghost" disabled="{composeOperationBusy}" on-press="compose_discard">Discard</button>
+      <button size="sm" variant="outline" icon="save" disabled="{composeOperationBusy}" on-press="compose_save">Save draft</button>
+      <button size="sm" variant="primary" icon="send" disabled="{not composeCanSend}" on-press="compose_send">Send</button>
+    </row>
+  </column>
+</column>

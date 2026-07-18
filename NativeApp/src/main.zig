@@ -4,6 +4,7 @@ const runner = @import("runner");
 const native_sdk = @import("native_sdk");
 const mail = @import("model.zig");
 const providers = @import("providers.zig");
+const outbound = @import("app/outbound.zig");
 
 pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
@@ -61,7 +62,27 @@ pub const Msg = union(enum) {
     toggle_star_selected,
     snooze_selected,
     open_selected_window,
+    activate_selected,
     close_window: usize,
+    compose_new,
+    compose_reply,
+    compose_reply_all,
+    compose_forward,
+    compose_close,
+    compose_discard,
+    compose_toggle_cc_bcc,
+    compose_select_account: usize,
+    compose_to_edit: canvas.TextInputEvent,
+    compose_cc_edit: canvas.TextInputEvent,
+    compose_bcc_edit: canvas.TextInputEvent,
+    compose_subject_edit: canvas.TextInputEvent,
+    compose_body_edit: canvas.TextInputEvent,
+    compose_save,
+    compose_save_close,
+    compose_send,
+    open_draft: usize,
+    compose_autosave: native_sdk.EffectTimer,
+    outbound_response: native_sdk.EffectResponse,
     initial_response: native_sdk.EffectResponse,
     gmail_detail_response: native_sdk.EffectResponse,
     mutation_response: native_sdk.EffectResponse,
@@ -69,11 +90,15 @@ pub const Msg = union(enum) {
     pub const view_unbound = .{
         "select_next",
         "select_previous",
+        "activate_selected",
         "focus_search",
         "close_window",
         "initial_response",
         "gmail_detail_response",
         "mutation_response",
+        "compose_close",
+        "compose_autosave",
+        "outbound_response",
     };
 };
 
@@ -81,7 +106,9 @@ pub const Model = mail.Model;
 pub const MailApp = native_sdk.UiAppWithFeatures(Model, Msg, .{ .runtime_markup = builtin.mode == .Debug });
 pub const Effects = MailApp.Effects;
 pub const app_markup = @embedFile("app.native");
+pub const compose_markup = @embedFile("ui/compose.native");
 pub const CompiledAppView = canvas.CompiledMarkupView(Model, Msg, app_markup);
+pub const CompiledComposeView = canvas.CompiledMarkupView(Model, Msg, compose_markup);
 
 pub fn initialModel() Model {
     return mail.initialModel();
@@ -122,11 +149,56 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
         },
         .open_selected_window => model.openSelectedWindow(),
+        .activate_selected => model.activateSelected(),
         .close_window => |index| model.closeWindow(index),
+        .compose_new => if (!model.composeBusy()) model.beginNewCompose(),
+        .compose_reply => if (!model.composeBusy()) model.beginMessageCompose(.reply),
+        .compose_reply_all => if (!model.composeBusy()) model.beginMessageCompose(.reply_all),
+        .compose_forward => if (!model.composeBusy()) model.beginMessageCompose(.forward),
+        .compose_close => outbound.save(model, fx, Effects.responseMsg(.outbound_response), true),
+        .compose_discard => outbound.discard(model, fx, Effects.responseMsg(.outbound_response)),
+        .compose_toggle_cc_bcc => model.composer.cc_bcc_visible = !model.composer.cc_bcc_visible,
+        .compose_select_account => |index| {
+            if (!model.composeAccountLocked() and index < model.account_count) {
+                model.composer.account_index = index;
+                model.composer.account_id = model.accounts[index].id;
+                model.composer.markEdited();
+            }
+        },
+        .compose_to_edit => |edit| applyComposeEdit(model, fx, .to, edit),
+        .compose_cc_edit => |edit| applyComposeEdit(model, fx, .cc, edit),
+        .compose_bcc_edit => |edit| applyComposeEdit(model, fx, .bcc, edit),
+        .compose_subject_edit => |edit| applyComposeEdit(model, fx, .subject, edit),
+        .compose_body_edit => |edit| applyComposeEdit(model, fx, .body, edit),
+        .compose_save => outbound.save(model, fx, Effects.responseMsg(.outbound_response), false),
+        .compose_save_close => outbound.save(model, fx, Effects.responseMsg(.outbound_response), true),
+        .compose_send => outbound.send(model, fx, Effects.responseMsg(.outbound_response)),
+        .open_draft => |id| if (!model.composeBusy()) model.openDraftById(id),
+        .compose_autosave => |timer| if (timer.outcome == .fired and model.composer.dirty)
+            outbound.save(model, fx, Effects.responseMsg(.outbound_response), false),
+        .outbound_response => |response| {
+            const sync_was_in_flight = model.syncInFlight();
+            if (outbound.handleResponse(model, response, fx, Effects.responseMsg(.outbound_response)) and sync_was_in_flight) {
+                providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response));
+            }
+        },
         .initial_response => |response| providers.handleInitialResponse(model, response, fx, Effects.responseMsg(.gmail_detail_response)),
         .gmail_detail_response => |response| providers.handleGmailDetailResponse(model, response, fx, Effects.responseMsg(.gmail_detail_response)),
         .mutation_response => |response| providers.handleMutationResponse(model, response),
     }
+}
+
+const ComposeField = enum { to, cc, bcc, subject, body };
+
+fn applyComposeEdit(model: *Model, fx: *Effects, field: ComposeField, edit: canvas.TextInputEvent) void {
+    switch (field) {
+        .to => model.composer.applyTo(edit),
+        .cc => model.composer.applyCc(edit),
+        .bcc => model.composer.applyBcc(edit),
+        .subject => model.composer.applySubject(edit),
+        .body => model.composer.applyBody(edit),
+    }
+    outbound.scheduleAutosave(model, fx, Effects.timerMsg(.compose_autosave));
 }
 
 fn performMutation(model: *Model, operation: providers.MutationOperation, fx: *Effects) void {
@@ -176,25 +248,31 @@ pub fn onKey(keyboard: canvas.WidgetKeyboardEvent) ?Msg {
     }
     if (std.ascii.eqlIgnoreCase(key, "j") or std.ascii.eqlIgnoreCase(key, "arrowdown")) return .select_next;
     if (std.ascii.eqlIgnoreCase(key, "k") or std.ascii.eqlIgnoreCase(key, "arrowup")) return .select_previous;
-    if (std.ascii.eqlIgnoreCase(key, "enter") or std.ascii.eqlIgnoreCase(key, "o")) return .open_selected_window;
+    if (std.ascii.eqlIgnoreCase(key, "enter") or std.ascii.eqlIgnoreCase(key, "o")) return .activate_selected;
     if (std.ascii.eqlIgnoreCase(key, "e")) return .archive_selected;
     if (std.ascii.eqlIgnoreCase(key, "s")) return .toggle_star_selected;
     if (std.ascii.eqlIgnoreCase(key, "h")) return .snooze_selected;
     if (std.ascii.eqlIgnoreCase(key, "delete") or std.mem.eql(u8, key, "#")) return .trash_selected;
     if (std.mem.eql(u8, key, "/")) return .focus_search;
+    if (std.ascii.eqlIgnoreCase(key, "c")) return .compose_new;
+    if (std.ascii.eqlIgnoreCase(key, "r")) return .compose_reply;
+    if (std.ascii.eqlIgnoreCase(key, "a")) return .compose_reply_all;
+    if (std.ascii.eqlIgnoreCase(key, "f")) return .compose_forward;
     return null;
 }
 
 pub fn onCommand(name: []const u8) ?Msg {
     if (std.mem.eql(u8, name, "mail.refresh")) return .refresh;
     if (std.mem.eql(u8, name, "mail.open-window")) return .open_selected_window;
+    if (std.mem.eql(u8, name, "mail.compose")) return .compose_new;
     return null;
 }
 
 pub fn mailWindows(model: *const Model, scratch: *MailApp.WindowsScratch) []const MailApp.WindowDescriptor {
     var count: usize = 0;
-    for (model.open_windows[0..model.open_window_count]) |thread_index| {
-        if (thread_index >= model.thread_count or count >= scratch.windows.len) continue;
+    for (model.open_windows[0..model.open_window_count]) |message_id| {
+        const thread_index = model.threadIndexById(message_id) orelse continue;
+        if (count >= scratch.windows.len) continue;
         const thread = &model.threads[thread_index];
         scratch.windows[count] = .{
             .label = thread.window_label.slice(),
@@ -204,7 +282,20 @@ pub fn mailWindows(model: *const Model, scratch: *MailApp.WindowsScratch) []cons
             .height = 640,
             .min_width = 480,
             .min_height = 360,
-            .on_close = Msg{ .close_window = thread_index },
+            .on_close = Msg{ .close_window = @intCast(message_id.value) },
+        };
+        count += 1;
+    }
+    if (model.composeOpen() and count < scratch.windows.len) {
+        scratch.windows[count] = .{
+            .label = "compose",
+            .canvas_label = "compose-canvas",
+            .title = model.composeTitle(),
+            .width = 760,
+            .height = 680,
+            .min_width = 540,
+            .min_height = 620,
+            .on_close = .compose_close,
         };
         count += 1;
     }
@@ -212,6 +303,7 @@ pub fn mailWindows(model: *const Model, scratch: *MailApp.WindowsScratch) []cons
 }
 
 pub fn mailWindowView(ui: *MailApp.Ui, model: *const Model, window_label: []const u8) MailApp.Ui.Node {
+    if (std.mem.eql(u8, window_label, "compose")) return CompiledComposeView.build(ui, model);
     for (model.threads[0..model.thread_count]) |*thread| {
         if (std.mem.eql(u8, thread.window_label.slice(), window_label)) return detailWindow(ui, model, thread);
     }
@@ -277,4 +369,7 @@ test {
     _ = @import("tests.zig");
     _ = @import("model.zig");
     _ = @import("providers.zig");
+    _ = @import("app/compose.zig");
+    _ = @import("app/outbound.zig");
+    _ = @import("providers/outbound_tests.zig");
 }

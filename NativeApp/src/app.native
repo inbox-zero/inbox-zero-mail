@@ -6,6 +6,7 @@
       <spinner width="18" height="18" label="Synchronizing mail" />
     </if>
     <text foreground="text_muted">{loadingLabel}</text>
+    <button size="sm" variant="primary" icon="edit" on-press="compose_new">Compose</button>
     <button size="sm" variant="outline" icon="refresh-cw" on-press="refresh">Refresh</button>
   </row>
   <separator />
@@ -43,40 +44,82 @@
         <row gap="8" cross="center">
           <column grow="1" gap="2">
             <text size="heading">{scopeTitle}</text>
-            <text size="sm" foreground="text_muted">{visibleThreadCount} messages | {unreadCount} unread</text>
-          </column>
-        </row>
-        <search-field text="{search}" placeholder="Search mail" label="Search mail" on-input="search_edit" autofocus="{search_requested}" />
-        <scroll grow="1" label="Messages">
-          <column gap="4">
-            <for each="visibleThreads" key="index" as="t">
-              <panel on-press="select_thread:{t.index}" selected="{t.selected}" role="listitem" label="{t.accessible}">
-                <column padding="10" gap="4">
-                  <row gap="6" cross="center">
-                    <if test="{t.unread}"><badge variant="primary">New</badge></if>
-                    <text grow="1" overflow="ellipsis">{t.subject}</text>
-                    <if test="{t.starred}"><icon name="circle-dot" width="14" height="14" label="Starred" /></if>
-                  </row>
-                  <row gap="6" cross="center">
-                    <text grow="1" size="sm">{t.sender}</text>
-                    <badge variant="secondary">{t.account}</badge>
-                  </row>
-                  <text size="sm" foreground="text_muted" overflow="ellipsis">{t.snippet}</text>
-                </column>
-              </panel>
-            </for>
+            <if test="{isDraftsView}">
+              <text size="sm" foreground="text_muted">{visibleDraftCount} saved drafts</text>
+            </if>
             <else>
-              <column padding="24" gap="8" cross="center">
-                <icon name="file-text" width="28" height="28" label="Empty inbox" />
-                <text>No messages match this view.</text>
-                <text size="sm" foreground="text_muted">Try another account, view, or search.</text>
-              </column>
+              <text size="sm" foreground="text_muted">{visibleThreadCount} messages | {unreadCount} unread</text>
             </else>
           </column>
-        </scroll>
+        </row>
+        <search-field text="{search}" placeholder="Search messages or drafts" label="Search mail" on-input="search_edit" autofocus="{search_requested}" />
+        <if test="{isDraftsView}">
+          <scroll grow="1" label="Drafts">
+            <column gap="4">
+              <for each="draftsView" key="id" as="d">
+                <panel on-press="open_draft:{d.id}" selected="{d.selected}" role="listitem" label="{d.accessible}">
+                  <column padding="10" gap="4">
+                    <row gap="6" cross="center">
+                      <icon name="edit" width="14" height="14" label="Draft" />
+                      <text grow="1" overflow="ellipsis">{d.subject}</text>
+                      <if test="{d.remote}"><badge variant="secondary">Saved</badge></if>
+                    </row>
+                    <text size="sm" foreground="text_muted" overflow="ellipsis">To: {d.recipients}</text>
+                    <badge variant="secondary">{d.account}</badge>
+                  </column>
+                </panel>
+              </for>
+              <else>
+                <column padding="24" gap="8" cross="center">
+                  <icon name="edit" width="28" height="28" label="No drafts" />
+                  <text>No saved drafts.</text>
+                  <button size="sm" variant="outline" on-press="compose_new">Compose email</button>
+                </column>
+              </else>
+            </column>
+          </scroll>
+        </if>
+        <else>
+          <scroll grow="1" label="Messages">
+            <column gap="4">
+              <for each="visibleThreads" key="index" as="t">
+                <panel on-press="select_thread:{t.index}" selected="{t.selected}" role="listitem" label="{t.accessible}">
+                  <column padding="10" gap="4">
+                    <row gap="6" cross="center">
+                      <if test="{t.unread}"><badge variant="primary">New</badge></if>
+                      <text grow="1" overflow="ellipsis">{t.subject}</text>
+                      <if test="{t.starred}"><icon name="circle-dot" width="14" height="14" label="Starred" /></if>
+                    </row>
+                    <row gap="6" cross="center">
+                      <text grow="1" size="sm">{t.sender}</text>
+                      <badge variant="secondary">{t.account}</badge>
+                    </row>
+                    <text size="sm" foreground="text_muted" overflow="ellipsis">{t.snippet}</text>
+                  </column>
+                </panel>
+              </for>
+              <else>
+                <column padding="24" gap="8" cross="center">
+                  <icon name="file-text" width="28" height="28" label="Empty inbox" />
+                  <text>No messages match this view.</text>
+                  <text size="sm" foreground="text_muted">Try another account, view, or search.</text>
+                </column>
+              </else>
+            </column>
+          </scroll>
+        </else>
       </column>
 
       <column min-width="360" label="Message detail">
+        <if test="{isDraftsView}">
+          <column grow="1" main="center" cross="center" gap="10" padding="24">
+            <icon name="edit" width="32" height="32" label="Saved drafts" />
+            <text size="heading">Saved drafts</text>
+            <text foreground="text_muted" wrap="true">Select a draft to continue editing it in its own window.</text>
+            <button variant="primary" icon="edit" on-press="compose_new">Compose new email</button>
+          </column>
+        </if>
+        <else>
         <if test="{hasSelection}">
           <column padding="18" gap="10" background="surface">
             <row gap="8" cross="center">
@@ -88,9 +131,16 @@
               <button size="sm" variant="outline" icon="external-link" on-press="open_selected_window">New window</button>
             </row>
             <row gap="6" cross="center">
+              <button size="sm" variant="primary" on-press="compose_reply">Reply</button>
+              <button size="sm" variant="outline" on-press="compose_reply_all">Reply all</button>
+              <button size="sm" variant="outline" on-press="compose_forward">Forward</button>
+            </row>
+            <row gap="6" cross="center">
               <button size="sm" variant="outline" icon="archive" on-press="archive_selected">Archive</button>
               <button size="sm" variant="outline" on-press="toggle_read_selected">{selectedReadLabel}</button>
               <button size="sm" variant="outline" on-press="toggle_star_selected">{selectedStarLabel}</button>
+            </row>
+            <row gap="6" cross="center">
               <button size="sm" variant="outline" icon="clock" on-press="snooze_selected">Snooze</button>
               <button size="sm" variant="destructive" icon="trash" on-press="trash_selected">Trash</button>
             </row>
@@ -109,9 +159,10 @@
             <text size="sm" foreground="text_muted">Use J and K or the arrow keys to navigate.</text>
           </column>
         </else>
+        </else>
       </column>
     </split>
   </split>
 
-  <status-bar>{statusMessage} | J/K navigate | E archive | S star | Shift+U unread | H snooze | Enter new window</status-bar>
+  <status-bar>{statusMessage} | C compose | R reply | A reply all | F forward | J/K navigate | E archive | S star | Enter new window</status-bar>
 </column>

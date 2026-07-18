@@ -4,7 +4,9 @@ const mail = @import("model.zig");
 
 pub const initial_key_base: u64 = 100;
 pub const gmail_detail_key_base: u64 = 1_000;
+pub const gmail_draft_detail_key_base: u64 = 10_000;
 const generation_key_stride: u64 = 100_000;
+const gmail_draft_list_folder_index: usize = 10;
 
 const GmailThreadReference = struct {
     id: []const u8,
@@ -12,6 +14,14 @@ const GmailThreadReference = struct {
 
 const GmailThreadList = struct {
     threads: ?[]const GmailThreadReference = null,
+};
+
+const GmailDraftReference = struct {
+    id: []const u8,
+};
+
+const GmailDraftList = struct {
+    drafts: ?[]const GmailDraftReference = null,
 };
 
 const GmailBody = struct {
@@ -25,6 +35,7 @@ const GmailHeader = struct {
 
 const GmailPayload = struct {
     mimeType: ?[]const u8 = null,
+    filename: ?[]const u8 = null,
     headers: ?[]const GmailHeader = null,
     body: ?GmailBody = null,
     parts: ?[]const GmailPayload = null,
@@ -43,6 +54,11 @@ const GmailThread = struct {
     id: []const u8,
     snippet: ?[]const u8 = null,
     messages: []const GmailMessage,
+};
+
+const GmailDraft = struct {
+    id: []const u8,
+    message: GmailMessage,
 };
 
 const OutlookEmailAddress = struct {
@@ -70,6 +86,11 @@ const OutlookMessage = struct {
     bodyPreview: ?[]const u8 = null,
     body: ?OutlookBody = null,
     from: ?OutlookRecipient = null,
+    toRecipients: ?[]const OutlookRecipient = null,
+    ccRecipients: ?[]const OutlookRecipient = null,
+    bccRecipients: ?[]const OutlookRecipient = null,
+    replyTo: ?[]const OutlookRecipient = null,
+    hasAttachments: ?bool = null,
     parentFolderId: ?[]const u8 = null,
     receivedDateTime: ?[]const u8 = null,
     isRead: ?bool = null,
@@ -80,8 +101,8 @@ const OutlookMessageList = struct {
     value: []const OutlookMessage,
 };
 
-const OutlookFolder = enum { inbox, archive, trash };
-const outlook_folders = [_]OutlookFolder{ .inbox, .archive, .trash };
+const OutlookFolder = enum { inbox, archive, trash, drafts };
+const outlook_folders = [_]OutlookFolder{ .inbox, .archive, .trash, .drafts };
 
 const OutlookMutationReceipt = struct {
     id: ?[]const u8 = null,
@@ -89,11 +110,17 @@ const OutlookMutationReceipt = struct {
 
 pub fn startInitialSync(model: *mail.Model, fx: anytype, on_response: anytype) void {
     const generation = model.resetForSync();
+    model.resetRemoteDrafts();
     for (model.accounts[0..model.account_count], 0..) |*account, index| {
         account.sync_state = .loading;
         account.gmail_ref_count = 0;
         account.gmail_next_ref = 0;
         account.gmail_in_flight = false;
+        account.gmail_threads_done = false;
+        account.gmail_draft_ref_count = 0;
+        account.gmail_draft_next_ref = 0;
+        account.gmail_draft_in_flight = false;
+        account.gmail_drafts_done = false;
         account.outlook_pending = 0;
         account.error_message = .{};
         var url_buffer: [512]u8 = undefined;
@@ -110,11 +137,18 @@ pub fn startInitialSync(model: *mail.Model, fx: anytype, on_response: anytype) v
             }
             continue;
         }
-        const url = std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads?maxResults=50", .{account.baseUrl()}) catch {
-                account.sync_state = .failed;
-                continue;
+        const url = std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads?maxResults=128&includeSpamTrash=true", .{account.baseUrl()}) catch {
+            account.sync_state = .failed;
+            continue;
         };
         fetchAuthorized(fx, generation * generation_key_stride + initial_key_base + index, .GET, url, account.tokenSlice(), "", on_response);
+        const drafts_url = std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/drafts?maxResults=50", .{account.baseUrl()}) catch {
+            account.error_message.set("Could not build the Gmail drafts URL.");
+            account.gmail_drafts_done = true;
+            continue;
+        };
+        const draft_key = generation * generation_key_stride + initial_key_base + gmail_draft_list_folder_index * mail.max_accounts + index;
+        fetchAuthorized(fx, draft_key, .GET, drafts_url, account.tokenSlice(), "", on_response);
     }
 }
 
@@ -133,6 +167,10 @@ pub fn handleInitialResponse(model: *mail.Model, response: native_sdk.EffectResp
             account.outlook_pending -= 1;
             account.error_message.set("One or more Outlook folders could not be loaded.");
             finishOutlookSync(model, account);
+        } else if (account.provider == .gmail) {
+            account.error_message.set("One or more Gmail collections could not be loaded.");
+            if (folder_index == gmail_draft_list_folder_index) account.gmail_drafts_done = true else account.gmail_threads_done = true;
+            finishGmailSync(model, account);
         } else {
             failAccount(account, "Initial provider sync failed.");
         }
@@ -141,16 +179,34 @@ pub fn handleInitialResponse(model: *mail.Model, response: native_sdk.EffectResp
     }
     switch (account.provider) {
         .gmail => {
-            parseGmailList(account, response.body) catch {
-                failAccount(account, "Gmail returned an unreadable thread list.");
-                updateSyncStatus(model);
-                return;
-            };
-            scheduleNextGmailDetail(model, account_index, fx, detail_response);
+            if (folder_index == gmail_draft_list_folder_index) {
+                parseGmailDraftList(account, response.body) catch {
+                    account.error_message.set("Gmail returned an unreadable draft list.");
+                    account.gmail_drafts_done = true;
+                    finishGmailSync(model, account);
+                    updateSyncStatus(model);
+                    return;
+                };
+                scheduleNextGmailDraftDetail(model, account_index, fx, detail_response);
+            } else {
+                parseGmailList(account, response.body) catch {
+                    account.error_message.set("Gmail returned an unreadable thread list.");
+                    account.gmail_threads_done = true;
+                    finishGmailSync(model, account);
+                    updateSyncStatus(model);
+                    return;
+                };
+                scheduleNextGmailDetail(model, account_index, fx, detail_response);
+            }
         },
         .microsoft => {
             if (folder_index >= outlook_folders.len) return;
-            parseOutlookMessages(model, account_index, outlook_folders[folder_index], response.body) catch {
+            const folder = outlook_folders[folder_index];
+            const parsed_ok = if (folder == .drafts)
+                parseOutlookDrafts(model, account_index, response.body)
+            else
+                parseOutlookMessages(model, account_index, folder, response.body);
+            parsed_ok catch {
                 if (account.outlook_pending > 0) account.outlook_pending -= 1;
                 account.error_message.set("One or more Outlook folders were unreadable.");
                 finishOutlookSync(model, account);
@@ -170,24 +226,38 @@ pub fn handleGmailDetailResponse(model: *mail.Model, response: native_sdk.Effect
     if (generation != model.sync_generation) return;
     const local_key = response.key % generation_key_stride;
     if (local_key < gmail_detail_key_base) return;
-    const encoded = local_key - gmail_detail_key_base;
+    const is_draft = local_key >= gmail_draft_detail_key_base;
+    const encoded = local_key - if (is_draft) gmail_draft_detail_key_base else gmail_detail_key_base;
     const account_index: usize = @intCast(encoded / 100);
     if (account_index >= model.account_count) return;
     const account = &model.accounts[account_index];
-    account.gmail_in_flight = false;
+    if (is_draft) account.gmail_draft_in_flight = false else account.gmail_in_flight = false;
     if (!responseOk(response)) {
-        account.error_message.set("One or more Gmail threads could not be loaded.");
-        scheduleNextGmailDetail(model, account_index, fx, detail_response);
+        account.error_message.set(if (is_draft) "One or more Gmail drafts could not be loaded." else "One or more Gmail threads could not be loaded.");
+        if (is_draft)
+            scheduleNextGmailDraftDetail(model, account_index, fx, detail_response)
+        else
+            scheduleNextGmailDetail(model, account_index, fx, detail_response);
         updateSyncStatus(model);
         return;
     }
-    parseGmailThread(model, account_index, response.body) catch {
-        account.error_message.set("One or more Gmail threads were unreadable.");
+    if (is_draft) {
+        parseGmailDraft(model, account_index, response.body) catch {
+            account.error_message.set("One or more Gmail drafts were unreadable.");
+            scheduleNextGmailDraftDetail(model, account_index, fx, detail_response);
+            updateSyncStatus(model);
+            return;
+        };
+        scheduleNextGmailDraftDetail(model, account_index, fx, detail_response);
+    } else {
+        parseGmailThread(model, account_index, response.body) catch {
+            account.error_message.set("One or more Gmail threads were unreadable.");
+            scheduleNextGmailDetail(model, account_index, fx, detail_response);
+            updateSyncStatus(model);
+            return;
+        };
         scheduleNextGmailDetail(model, account_index, fx, detail_response);
-        updateSyncStatus(model);
-        return;
-    };
-    scheduleNextGmailDetail(model, account_index, fx, detail_response);
+    }
     model.reconcileSelection();
     updateSyncStatus(model);
 }
@@ -207,8 +277,9 @@ pub fn handleMutationResponse(model: *mail.Model, response: native_sdk.EffectRes
     const success = responseOk(response);
     if (success) {
         for (&model.pending_mutations) |*pending| {
-            if (!pending.active or pending.key != response.key or pending.thread_index >= model.thread_count) continue;
-            const thread = &model.threads[pending.thread_index];
+            if (!pending.active or pending.key != response.key) continue;
+            const thread_index = model.threadIndexById(pending.thread_id) orelse continue;
+            const thread = &model.threads[thread_index];
             if (thread.provider == .microsoft and response.body.len > 0) {
                 const parsed = std.json.parseFromSlice(OutlookMutationReceipt, std.heap.page_allocator, response.body, .{ .ignore_unknown_fields = true }) catch break;
                 defer parsed.deinit();
@@ -293,7 +364,8 @@ fn scheduleNextGmailDetail(model: *mail.Model, account_index: usize, fx: anytype
     const account = &model.accounts[account_index];
     if (account.gmail_in_flight) return;
     if (account.gmail_next_ref >= account.gmail_ref_count) {
-        account.sync_state = if (account.error_message.isEmpty()) .ready else .partial;
+        account.gmail_threads_done = true;
+        finishGmailSync(model, account);
         updateSyncStatus(model);
         return;
     }
@@ -311,6 +383,31 @@ fn scheduleNextGmailDetail(model: *mail.Model, account_index: usize, fx: anytype
     fetchAuthorized(fx, key, .GET, url, account.tokenSlice(), "", detail_response);
 }
 
+fn scheduleNextGmailDraftDetail(model: *mail.Model, account_index: usize, fx: anytype, detail_response: anytype) void {
+    const account = &model.accounts[account_index];
+    if (account.gmail_draft_in_flight) return;
+    if (account.gmail_draft_next_ref >= account.gmail_draft_ref_count) {
+        account.gmail_drafts_done = true;
+        finishGmailSync(model, account);
+        updateSyncStatus(model);
+        return;
+    }
+    const ref_index = account.gmail_draft_next_ref;
+    const reference = &account.gmail_draft_refs[ref_index];
+    account.gmail_draft_next_ref += 1;
+    account.gmail_draft_in_flight = true;
+    var url_buffer: [512]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/drafts/{s}?format=full", .{ account.baseUrl(), reference.id.slice() }) catch {
+        account.error_message.set("Could not build a Gmail draft detail URL.");
+        account.gmail_drafts_done = true;
+        finishGmailSync(model, account);
+        updateSyncStatus(model);
+        return;
+    };
+    const key = model.sync_generation * generation_key_stride + gmail_draft_detail_key_base + account_index * 100 + ref_index;
+    fetchAuthorized(fx, key, .GET, url, account.tokenSlice(), "", detail_response);
+}
+
 fn parseGmailList(account: *mail.Account, body: []const u8) !void {
     const parsed = try std.json.parseFromSlice(GmailThreadList, std.heap.page_allocator, body, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
@@ -323,6 +420,47 @@ fn parseGmailList(account: *mail.Account, body: []const u8) !void {
     }
 }
 
+fn parseGmailDraftList(account: *mail.Account, body: []const u8) !void {
+    const parsed = try std.json.parseFromSlice(GmailDraftList, std.heap.page_allocator, body, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    account.gmail_draft_ref_count = 0;
+    account.gmail_draft_next_ref = 0;
+    for (parsed.value.drafts orelse &.{}) |reference| {
+        if (account.gmail_draft_ref_count >= account.gmail_draft_refs.len) break;
+        account.gmail_draft_refs[account.gmail_draft_ref_count].id.set(reference.id);
+        account.gmail_draft_ref_count += 1;
+    }
+}
+
+pub fn parseGmailDraft(model: *mail.Model, account_index: usize, body: []const u8) !void {
+    const parsed = try std.json.parseFromSlice(GmailDraft, std.heap.page_allocator, body, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    const message = &parsed.value.message;
+    var draft = mail.Draft{
+        .account_index = account_index,
+        .account_id = model.accounts[account_index].id,
+        .provider = .gmail,
+        // Gmail assigns a threadId to ordinary new drafts too, so it cannot be
+        // used to infer reply intent after a fresh sync.
+        .mode = .new,
+        .remote = true,
+    };
+    draft.provider_draft_id.set(parsed.value.id);
+    draft.provider_message_id.set(message.id);
+    draft.source_thread_id.set(message.threadId);
+    draft.source_rfc_message_id.set(headerValue(&message.payload, "In-Reply-To") orelse "");
+    draft.source_references.set(headerValue(&message.payload, "References") orelse "");
+    if (!draft.source_rfc_message_id.isEmpty()) draft.mode = .reply;
+    draft.to.set(headerValue(&message.payload, "To") orelse "");
+    draft.cc.set(headerValue(&message.payload, "Cc") orelse "");
+    draft.bcc.set(headerValue(&message.payload, "Bcc") orelse "");
+    draft.subject.set(headerValue(&message.payload, "Subject") orelse "(No subject)");
+    draft.updated_at.set(message.internalDate orelse "");
+    setGmailBody(&draft.body, &message.payload, message.snippet orelse "");
+    draft.provider_content_read_only = gmailPayloadHasRichContent(&message.payload);
+    _ = model.addDraft(draft);
+}
+
 pub fn parseGmailThread(model: *mail.Model, account_index: usize, body: []const u8) !void {
     const parsed = try std.json.parseFromSlice(GmailThread, std.heap.page_allocator, body, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
@@ -331,25 +469,23 @@ pub fn parseGmailThread(model: *mail.Model, account_index: usize, body: []const 
     var thread = mail.MailThread{ .account_index = account_index, .provider = .gmail };
     thread.provider_thread_id.set(parsed.value.id);
     thread.provider_message_id.set(message.id);
+    thread.rfc_message_id.set(headerValue(&message.payload, "Message-ID") orelse headerValue(&message.payload, "Message-Id") orelse "");
+    thread.references.set(headerValue(&message.payload, "References") orelse "");
     thread.snippet.set(message.snippet orelse parsed.value.snippet orelse "");
     thread.received_at.set(message.internalDate orelse "");
     thread.subject.set(headerValue(&message.payload, "Subject") orelse "(No subject)");
     thread.sender.set(headerValue(&message.payload, "From") orelse model.accounts[account_index].emailSlice());
+    thread.sender_email.set(mail.extractAddress(thread.senderSlice()));
+    thread.reply_to.set(headerValue(&message.payload, "Reply-To") orelse "");
+    thread.to_recipients.set(headerValue(&message.payload, "To") orelse "");
+    thread.cc_recipients.set(headerValue(&message.payload, "Cc") orelse "");
     thread.unread = hasLabel(message.labelIds, "UNREAD");
     thread.starred = hasLabel(message.labelIds, "STARRED");
     thread.in_inbox = hasLabel(message.labelIds, "INBOX");
     thread.trashed = hasLabel(message.labelIds, "TRASH");
-    thread.archived = !thread.in_inbox and !thread.trashed;
-    if (findPlainBody(&message.payload)) |encoded| {
-        var decoded: [8192]u8 = undefined;
-        const size = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(encoded) catch 0;
-        if (size > 0 and size <= decoded.len) {
-            if (std.base64.url_safe_no_pad.Decoder.decode(decoded[0..size], encoded)) |_| {
-                thread.body.set(decoded[0..size]);
-            } else |_| {}
-        }
-    }
-    if (thread.body.isEmpty()) thread.body.set(thread.snippetSlice());
+    thread.archived = !thread.in_inbox and !thread.trashed and
+        !hasLabel(message.labelIds, "SENT") and !hasLabel(message.labelIds, "DRAFT") and !hasLabel(message.labelIds, "SPAM");
+    setGmailBody(&thread.body, &message.payload, thread.snippetSlice());
     _ = model.addThread(thread);
 }
 
@@ -366,9 +502,16 @@ pub fn parseOutlookMessages(model: *mail.Model, account_index: usize, folder: Ou
         thread.subject.set(message.subject orelse "(No subject)");
         if (message.from) |sender| {
             thread.sender.set(sender.emailAddress.name orelse sender.emailAddress.address);
+            thread.sender_email.set(sender.emailAddress.address);
         } else {
             thread.sender.set(model.accounts[account_index].emailSlice());
+            thread.sender_email.set(model.accounts[account_index].emailSlice());
         }
+        if (message.replyTo) |recipients| {
+            if (recipients.len > 0) thread.reply_to.set(recipients[0].emailAddress.address);
+        }
+        setOutlookRecipients(&thread.to_recipients, message.toRecipients orelse &.{});
+        setOutlookRecipients(&thread.cc_recipients, message.ccRecipients orelse &.{});
         thread.snippet.set(message.bodyPreview orelse "");
         thread.received_at.set(message.receivedDateTime orelse "");
         thread.unread = !(message.isRead orelse false);
@@ -390,6 +533,39 @@ pub fn parseOutlookMessages(model: *mail.Model, account_index: usize, folder: Ou
     }
 }
 
+pub fn parseOutlookDrafts(model: *mail.Model, account_index: usize, body: []const u8) !void {
+    const parsed = try std.json.parseFromSlice(OutlookMessageList, std.heap.page_allocator, body, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    for (parsed.value.value) |message| {
+        var draft = mail.Draft{
+            .account_index = account_index,
+            .account_id = model.accounts[account_index].id,
+            .provider = .microsoft,
+            .remote = true,
+        };
+        draft.provider_draft_id.set(message.id);
+        draft.provider_message_id.set(message.id);
+        draft.source_thread_id.set(message.conversationId);
+        draft.subject.set(message.subject orelse "(No subject)");
+        setOutlookRecipients(&draft.to, message.toRecipients orelse &.{});
+        setOutlookRecipients(&draft.cc, message.ccRecipients orelse &.{});
+        setOutlookRecipients(&draft.bcc, message.bccRecipients orelse &.{});
+        draft.updated_at.set(message.receivedDateTime orelse "");
+        if (message.body) |message_body| {
+            if (std.ascii.eqlIgnoreCase(message_body.contentType, "html")) {
+                var plain_buffer: [16 * 1024]u8 = undefined;
+                draft.body.set(stripHtml(message_body.content, &plain_buffer));
+            } else {
+                draft.body.set(message_body.content);
+            }
+        }
+        draft.provider_content_read_only = (message.hasAttachments orelse false) or
+            (if (message.body) |message_body| std.ascii.eqlIgnoreCase(message_body.contentType, "html") else false);
+        if (draft.body.isEmpty()) draft.body.set(message.bodyPreview orelse "");
+        _ = model.addDraft(draft);
+    }
+}
+
 fn responseOk(response: native_sdk.EffectResponse) bool {
     return response.outcome == .ok and response.status >= 200 and response.status < 300 and !response.truncated;
 }
@@ -406,11 +582,18 @@ fn finishOutlookSync(model: *mail.Model, account: *mail.Account) void {
     updateSyncStatus(model);
 }
 
+fn finishGmailSync(model: *mail.Model, account: *mail.Account) void {
+    if (!account.gmail_threads_done or !account.gmail_drafts_done) return;
+    account.sync_state = if (account.error_message.isEmpty()) .ready else .partial;
+    updateSyncStatus(model);
+}
+
 fn outlookFolderPath(folder: OutlookFolder) []const u8 {
     return switch (folder) {
         .inbox => "inbox",
         .archive => "archive",
         .trash => "deleteditems",
+        .drafts => "drafts",
     };
 }
 
@@ -461,6 +644,50 @@ fn findPlainBody(payload: *const GmailPayload) ?[]const u8 {
     return null;
 }
 
+fn findHtmlBody(payload: *const GmailPayload) ?[]const u8 {
+    if (payload.mimeType) |mime_type| {
+        if (std.ascii.eqlIgnoreCase(mime_type, "text/html")) {
+            if (payload.body) |body| if (body.data) |data| return data;
+        }
+    }
+    for (payload.parts orelse &.{}) |*part| {
+        if (findHtmlBody(part)) |data| return data;
+    }
+    return null;
+}
+
+fn gmailPayloadHasRichContent(payload: *const GmailPayload) bool {
+    if (payload.filename) |filename| if (filename.len != 0) return true;
+    if (payload.mimeType) |mime_type| if (std.ascii.eqlIgnoreCase(mime_type, "text/html")) return true;
+    for (payload.parts orelse &.{}) |*part| if (gmailPayloadHasRichContent(part)) return true;
+    return false;
+}
+
+fn setGmailBody(output: anytype, payload: *const GmailPayload, fallback: []const u8) void {
+    if (findPlainBody(payload)) |encoded| {
+        var decoded: [16 * 1024]u8 = undefined;
+        const size = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(encoded) catch 0;
+        if (size > 0 and size <= decoded.len) {
+            if (std.base64.url_safe_no_pad.Decoder.decode(decoded[0..size], encoded)) |_| {
+                output.set(decoded[0..size]);
+            } else |_| {}
+        }
+    }
+    if (output.isEmpty()) {
+        if (findHtmlBody(payload)) |encoded| {
+            var decoded: [16 * 1024]u8 = undefined;
+            const size = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(encoded) catch 0;
+            if (size > 0 and size <= decoded.len) {
+                if (std.base64.url_safe_no_pad.Decoder.decode(decoded[0..size], encoded)) |_| {
+                    var plain: [16 * 1024]u8 = undefined;
+                    output.set(stripHtml(decoded[0..size], &plain));
+                } else |_| {}
+            }
+        }
+    }
+    if (output.isEmpty()) output.set(fallback);
+}
+
 fn stripHtml(source: []const u8, output: []u8) []const u8 {
     var out: usize = 0;
     var in_tag = false;
@@ -487,6 +714,21 @@ fn stripHtml(source: []const u8, output: []u8) []const u8 {
         previous_space = normalized == ' ';
     }
     return std.mem.trim(u8, output[0..out], " ");
+}
+
+fn setOutlookRecipients(output: anytype, recipients: []const OutlookRecipient) void {
+    var buffer: [1024]u8 = undefined;
+    var length: usize = 0;
+    for (recipients) |recipient| {
+        const address = recipient.emailAddress.address;
+        const separator = if (length == 0) "" else ", ";
+        if (length + separator.len + address.len > buffer.len) break;
+        @memcpy(buffer[length .. length + separator.len], separator);
+        length += separator.len;
+        @memcpy(buffer[length .. length + address.len], address);
+        length += address.len;
+    }
+    output.set(buffer[0..length]);
 }
 
 test "gmail parser maps headers labels and decoded body" {
@@ -567,4 +809,33 @@ test "outlook messages in one conversation remain independent rows" {
     try std.testing.expectEqual(@as(usize, 2), model.thread_count);
     try std.testing.expectEqualStrings("new", model.threads[0].providerThreadID());
     try std.testing.expectEqualStrings("old", model.threads[1].providerThreadID());
+}
+
+test "gmail remote draft parser restores recipients subject body and provider ids" {
+    var model = mail.initialModel();
+    const fixture =
+        \\{"id":"draft-1","message":{"id":"draft-message-1","threadId":"thread-1","labelIds":["DRAFT"],"snippet":"Saved body","internalDate":"1784365200000","payload":{"mimeType":"text/plain","headers":[{"name":"To","value":"Customer <customer@example.com>"},{"name":"Cc","value":"ops@example.com"},{"name":"Bcc","value":"audit@example.com"},{"name":"Subject","value":"Re: Saved work"},{"name":"In-Reply-To","value":"<original@example.com>"},{"name":"References","value":"<root@example.com>"}],"body":{"data":"U2F2ZWQgYm9keQ"}}}}
+    ;
+    try parseGmailDraft(&model, 0, fixture);
+    try std.testing.expectEqual(@as(usize, 1), model.draft_count);
+    try std.testing.expectEqualStrings("draft-1", model.drafts[0].provider_draft_id.slice());
+    try std.testing.expectEqualStrings("customer@example.com", mail.extractAddress(model.drafts[0].to.slice()));
+    try std.testing.expectEqualStrings("Saved body", model.drafts[0].body.slice());
+    try std.testing.expectEqual(.reply, model.drafts[0].mode);
+    try std.testing.expectEqualStrings("<original@example.com>", model.drafts[0].source_rfc_message_id.slice());
+    try std.testing.expectEqualStrings("<root@example.com>", model.drafts[0].source_references.slice());
+    try std.testing.expect(model.drafts[0].remote);
+}
+
+test "outlook remote draft parser restores graph recipients and plain body" {
+    var model = mail.initialModel();
+    const fixture =
+        \\{"value":[{"id":"graph-draft-1","conversationId":"conversation-1","subject":"Graph draft","bodyPreview":"Hello","body":{"contentType":"html","content":"<p>Hello <strong>Graph</strong></p>"},"toRecipients":[{"emailAddress":{"address":"to@example.com","name":"To"}}],"ccRecipients":[{"emailAddress":{"address":"cc@example.com"}}],"bccRecipients":[{"emailAddress":{"address":"bcc@example.com"}}],"receivedDateTime":"2026-07-18T10:00:00Z"}]}
+    ;
+    try parseOutlookDrafts(&model, 2, fixture);
+    try std.testing.expectEqual(@as(usize, 1), model.draft_count);
+    try std.testing.expectEqualStrings("graph-draft-1", model.drafts[0].provider_draft_id.slice());
+    try std.testing.expectEqualStrings("to@example.com", model.drafts[0].to.slice());
+    try std.testing.expectEqualStrings("bcc@example.com", model.drafts[0].bcc.slice());
+    try std.testing.expect(mail.containsAsciiIgnoreCase(model.drafts[0].body.slice(), "Hello Graph"));
 }

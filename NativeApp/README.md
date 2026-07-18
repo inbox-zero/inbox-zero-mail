@@ -9,17 +9,35 @@ macOS, Windows, and Linux without an embedded browser runtime.
 - Gmail and Outlook emulator accounts in one synchronized model.
 - Combined inbox and per-account views.
 - All, unread, starred, snoozed, archive, and trash filters.
-- Search and a split sidebar/list/detail layout.
+- Provider-backed drafts with search, reopen, autosave, save-and-close, and
+  discard.
+- New mail, reply, reply-all, and forward with To/Cc/Bcc and provider-threaded
+  delivery through Gmail and Microsoft Graph.
+- Search and a split sidebar/list/detail layout, including draft search.
 - Gmail and Outlook archive, read/unread, star, and trash mutations with
   optimistic rollback on provider failure.
-- Keyboard navigation and actions (`J`/`K`, arrows, `E`, `S`, `Shift+U`, `H`,
-  `/`, `Enter`).
-- Up to three independent message windows backed by the shared mail store.
+- Keyboard navigation and actions (`J`/`K`, arrows, `C`, `R`, `A`, `F`, `E`,
+  `S`, `Shift+U`, `H`, `/`, `Enter`).
+- Up to three independent message windows plus a native compose window, all
+  backed by the shared mail store and stable model identities.
 - Native SDK model, parser, effects, markup, and automation tests.
 
 The emulator bearer tokens are development-only identities seeded in
-`tools/emulator/dev-seed.yaml`. Production OAuth and OS credential storage are
-intentionally not replaced with plaintext files.
+`tools/emulator/dev-seed.yaml` and isolated in `src/config/emulator.zig`.
+Production OAuth and OS credential storage are intentionally not replaced with
+plaintext files.
+
+The current compose path is plain text (with a generated multipart
+plain/HTML MIME body for Gmail) and caps a message body at 16 KiB and each
+recipient field at 32 addresses. Incoming Gmail plain-text and HTML-only bodies
+and Outlook text/HTML bodies are readable. Attachment download/upload,
+production account onboarding, background pagination beyond the in-memory
+store, and offline SQLite caching remain separate parity work.
+
+Synced provider drafts that contain HTML or attachments are deliberately
+read-only in the plain-text composer: they can be sent unchanged or discarded,
+but are never rewritten, so opening them cannot silently strip formatting,
+inline content, or files. Plain-text provider drafts remain fully editable.
 
 ## Prerequisites
 
@@ -67,11 +85,11 @@ cd NativeApp
 ./scripts/automation-smoke.sh
 ```
 
-The smoke test waits for the app, polls its accessibility snapshot for the
-combined inbox and a seeded subject from each provider account, and writes a
-deterministic screenshot to
-`.zig-cache/native-sdk-automation/screenshot-mail-canvas.png`. It assumes the
-shared emulator and app are already running and does not stop either process.
+The smoke test waits for the app, polls its accessibility snapshot for both
+providers, opens the native compose window, verifies its controls, opens a
+message window and the drafts view, and writes deterministic mail and compose
+screenshots under `.zig-cache/native-sdk-automation/`. It assumes the shared
+emulator and app are already running and does not stop either process.
 
 ## Windows cross-build
 
@@ -106,20 +124,12 @@ Zig 0.16 socket setup currently hits an unsupported Wine AFD option.
 
 ## Native SDK 0.5.3 Linux host limitation
 
-On Ubuntu, Native SDK 0.5.3 with its Zig 0.16.0 toolchain builds this app but
-the GTK host aborts at startup with a `General protection exception` in
-`gtk_host.c:native_sdk_gtk_create_view`. The failure occurs while
-`native_sdk_strndup(role, role_len)` reads corrupted trailing C ABI arguments.
-We reproduced the same crash in the SDK's unchanged `examples/system-monitor`,
-so this is an upstream Linux host ABI issue rather than an Inbox Zero provider
-or UI failure. A local experiment that ignored those trailing metadata strings
-allowed snapshot assertions and deterministic screenshots to complete, but
-the GTK host still reported `UnsupportedViewFocus` / `ViewNotFound` for focus
-and frame operations; that workaround is not included here.
-
-The strict model/markup checks, unit tests, and Windows cross-build remain
-valid. Retest the unmodified macOS, Windows, and Linux native hosts when an
-upstream Native SDK release fixes the ABI boundary. The automation smoke script
-intentionally does not assert `gpu_nonblank=true` while this host defect is
-open; it still captures the screenshot artifact and verifies its file is
-non-empty.
+The unmodified GTK host starts under Xvfb and publishes complete accessibility
+snapshots, so the Linux smoke can verify sync, pointer actions, dynamic windows,
+and screenshot artifacts. Native SDK 0.5.3 still reports repeated
+`ViewNotFound` frame diagnostics and `UnsupportedViewFocus` for semantic text
+injection on this headless Linux host; `gpu_nonblank` is also unavailable on
+that presentation path. The same compose text actions are exercised by the
+Win32 Wine smoke, while save/send/provider sequencing is covered by deterministic
+fake-effects integration tests. Retest the Linux text-injection assertions when
+an upstream SDK release fixes its host view lookup.
