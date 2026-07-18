@@ -13,6 +13,7 @@ public struct GmailProviderConfiguration: Sendable {
     public var clientID: String
     public var clientSecret: String?
     public var emulatorClientSecret: String
+    public var tokenEndpointURL: URL?
     public var redirectURL: URL
     public var scopes: [String]
     public var emulatorAccounts: [String]
@@ -24,6 +25,7 @@ public struct GmailProviderConfiguration: Sendable {
         clientID: String,
         clientSecret: String? = nil,
         emulatorClientSecret: String = "inbox-zero-google-secret",
+        tokenEndpointURL: URL? = nil,
         redirectURL: URL,
         scopes: [String] = [
             "openid",
@@ -39,6 +41,7 @@ public struct GmailProviderConfiguration: Sendable {
         self.clientID = clientID
         self.clientSecret = clientSecret
         self.emulatorClientSecret = emulatorClientSecret
+        self.tokenEndpointURL = tokenEndpointURL
         self.redirectURL = redirectURL
         self.scopes = scopes
         self.emulatorAccounts = emulatorAccounts
@@ -60,6 +63,7 @@ public struct GmailProviderConfiguration: Sendable {
             ),
             clientID: clientID,
             clientSecret: clientSecret,
+            tokenEndpointURL: URL(string: "https://oauth2.googleapis.com/token")!,
             redirectURL: redirectURL,
             presentingWindowProvider: presentingWindowProvider
         )
@@ -99,6 +103,7 @@ public final class GmailProvider: NSObject, @unchecked Sendable, MailProvider {
         guard let authBaseURL = environment.authBaseURL else {
             throw MailProviderError.missingConfiguration("Gmail authBaseURL is missing.")
         }
+        let tokenEndpointURL = try configuration.resolvedTokenEndpointURL()
 
         guard let presentingWindow = configuration.presentingWindowProvider() else {
             throw MailProviderError.missingConfiguration("A presenting window is required for Gmail OAuth.")
@@ -112,7 +117,7 @@ public final class GmailProvider: NSObject, @unchecked Sendable, MailProvider {
                 clientSecret: configuration.clientSecret,
                 scopes: configuration.scopes,
                 authorizationEndpoint: authBaseURL.appendingPathComponent("o/oauth2/v2/auth"),
-                tokenEndpoint: authBaseURL.appendingPathComponent("o/oauth2/token"),
+                tokenEndpoint: tokenEndpointURL,
                 additionalParameters: [
                     "access_type": "offline",
                     "prompt": "consent",
@@ -150,12 +155,10 @@ public final class GmailProvider: NSObject, @unchecked Sendable, MailProvider {
     }
 
     public func restoreSession(_ session: ProviderSession) async throws -> ProviderSession {
-        guard session.accessToken.isEmpty == false else {
-            throw MailProviderError.unauthorized
-        }
-
         // Token still valid (with 60s buffer to avoid mid-request expiry)
-        if let expirationDate = session.expirationDate, expirationDate > Date().addingTimeInterval(60) {
+        if session.accessToken.isEmpty == false,
+           let expirationDate = session.expirationDate,
+           expirationDate > Date().addingTimeInterval(60) {
             return session
         }
 
@@ -461,10 +464,12 @@ private struct GmailAuthorizationPayload: Sendable {
 
 private struct GmailRefreshTokenResponse: Decodable {
     let accessToken: String
+    let refreshToken: String?
     let expiresIn: Int?
 
     enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
+        case refreshToken = "refresh_token"
         case expiresIn = "expires_in"
     }
 }
@@ -542,11 +547,14 @@ private extension GmailProvider {
     }
 
     func refreshAccessToken(session: ProviderSession, refreshToken: String) async throws -> ProviderSession {
-        guard let authBaseURL = environment.authBaseURL else {
+        let tokenEndpointURL: URL
+        do {
+            tokenEndpointURL = try configuration.resolvedTokenEndpointURL()
+        } catch {
             throw MailProviderError.unauthorized
         }
 
-        var request = URLRequest(url: authBaseURL.appendingPathComponent("o/oauth2/token"))
+        var request = URLRequest(url: tokenEndpointURL)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         var params: [String: String] = [
@@ -554,7 +562,9 @@ private extension GmailProvider {
             "refresh_token": refreshToken,
             "client_id": configuration.clientID,
         ]
-        if let clientSecret = configuration.clientSecret {
+        if environment.kind == .emulator {
+            params["client_secret"] = configuration.emulatorClientSecret
+        } else if let clientSecret = configuration.clientSecret {
             params["client_secret"] = clientSecret
         }
         request.httpBody = formURLEncodedBody(params)
@@ -564,6 +574,9 @@ private extension GmailProvider {
 
         var updated = session
         updated.accessToken = tokenResponse.accessToken
+        if let refreshToken = tokenResponse.refreshToken, refreshToken.isEmpty == false {
+            updated.refreshToken = refreshToken
+        }
         if let expiresIn = tokenResponse.expiresIn {
             updated.expirationDate = Date().addingTimeInterval(TimeInterval(expiresIn))
         }
@@ -949,6 +962,19 @@ private extension GmailProvider {
             return nil
         }
         return value
+    }
+}
+
+extension GmailProviderConfiguration {
+    func resolvedTokenEndpointURL() throws -> URL {
+        if let tokenEndpointURL {
+            return tokenEndpointURL
+        }
+        guard let authBaseURL = environment.authBaseURL else {
+            throw MailProviderError.missingConfiguration("Gmail authBaseURL is missing.")
+        }
+        let path = environment.kind == .emulator ? "oauth2/token" : "o/oauth2/token"
+        return authBaseURL.appending(path: path)
     }
 }
 

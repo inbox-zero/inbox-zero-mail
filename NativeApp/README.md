@@ -75,6 +75,33 @@ The test command builds the Native SDK model contract used by the strict
 markup/binding check. CI runs both commands and then cross-builds the Windows
 executable.
 
+## Live emulator contract test
+
+With the Google and Microsoft services running, exercise the OAuth and mail
+contracts used by the Native client:
+
+```sh
+cd NativeApp
+./scripts/emulator-e2e.sh
+```
+
+This test obtains fresh authorization-code tokens with S256 PKCE, validates
+profiles and refresh-token behavior, and then verifies provider state after
+Gmail and Graph reads, mutations, draft operations, new mail, replies,
+reply-all, and forwards. Every created subject contains a unique run ID, and
+Gmail artifacts are removed before the test exits. Set
+`INBOX_ZERO_E2E_RUN_ID` to supply a stable run label or
+`INBOX_ZERO_GOOGLE_BASE_URL`/`INBOX_ZERO_MICROSOFT_BASE_URL` to use different
+ports.
+
+The script reports three known emulator-fidelity gaps without treating them as
+working behavior: the pinned `@inbox-zero/emulate` 0.5.0 accepts unknown
+non-empty bearer tokens as its first seeded user and does not enforce scopes;
+Graph flag patches are accepted but ignored; and Graph `createForward` is
+missing even though the Native saved-forward flow uses it. Missing
+authentication, single-use OAuth codes, rotated/revoked refresh tokens, and all
+supported mail state transitions remain strict assertions.
+
 ## Automation smoke test
 
 Start the emulator and the automation-enabled app as shown above. From a

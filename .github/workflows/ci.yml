@@ -82,7 +82,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx --yes @inbox-zero/emulate@0.4.5 start --port 4402 --service google,microsoft --seed tools/emulator/dev-seed.yaml > /tmp/emulate.log 2>&1 &
+          npx --yes @inbox-zero/emulate@0.5.0 start --port 4402 --service google,microsoft --seed tools/emulator/dev-seed.yaml > /tmp/emulate.log 2>&1 &
           for attempt in {1..30}; do
             if curl -sf "http://localhost:4402/o/oauth2/v2/auth?client_id=inbox-zero-mail-dev&redirect_uri=http://localhost:4402/oauth/google&response_type=code&scope=openid%20email" > /dev/null; then
               exit 0
@@ -111,6 +111,10 @@ jobs:
           set -euo pipefail
           cd Packages/ProviderOutlook
           swift test
+
+      - name: Run Native provider emulator E2E
+        shell: bash
+        run: NativeApp/scripts/emulator-e2e.sh
 
   app-tests:
     runs-on: macos-26
