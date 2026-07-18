@@ -37,8 +37,19 @@ jobs:
           set -euo pipefail
           npx --yes @native-sdk/cli@0.5.3 build . --yes \
             -Dtarget=x86_64-windows-gnu \
-            -Dplatform=windows
+            -Dplatform=windows \
+            -Dautomation=true
           test -s zig-out/bin/inbox-zero-mail-native.exe
+
+      - name: Install Windows smoke dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wine xvfb
+
+      - name: Run Win32 client under Wine
+        shell: bash
+        run: ./scripts/windows-wine-smoke.sh
 
   package-tests:
     runs-on: macos-15

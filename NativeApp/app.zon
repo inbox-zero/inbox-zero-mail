@@ -24,7 +24,7 @@
                 .restore_state = true,
                 .restore_policy = "center_on_primary",
                 .views = .{
-                    .{ .label = "mail-canvas", .kind = "gpu_surface", .fill = true, .role = "Inbox Zero Mail canvas", .accessibility_label = "Inbox Zero Mail", .gpu_backend = "metal", .gpu_pixel_format = "bgra8_unorm", .gpu_present_mode = "timer", .gpu_alpha_mode = "opaque", .gpu_color_space = "srgb", .gpu_vsync = true },
+                    .{ .label = "mail-canvas", .kind = "gpu_surface", .fill = true, .role = "Inbox Zero Mail canvas", .accessibility_label = "Inbox Zero Mail", .gpu_backend = "software", .gpu_pixel_format = "bgra8_unorm", .gpu_present_mode = "timer", .gpu_alpha_mode = "opaque", .gpu_color_space = "srgb", .gpu_vsync = true },
                 },
             },
         },

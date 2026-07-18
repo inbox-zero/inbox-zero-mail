@@ -79,7 +79,8 @@ shared emulator and app are already running and does not stop either process.
 cd NativeApp
 npx --yes @native-sdk/cli@0.5.3 build . --yes \
   -Dtarget=x86_64-windows-gnu \
-  -Dplatform=windows
+  -Dplatform=windows \
+  -Dautomation=true
 test -s zig-out/bin/inbox-zero-mail-native.exe
 npx --yes @native-sdk/cli@0.5.3 package \
   --target windows \
@@ -88,6 +89,20 @@ npx --yes @native-sdk/cli@0.5.3 package \
 
 Native SDK 0.5.3 currently emits a directory-based Windows distributable; its
 Windows installer and signing story is still early.
+
+On Linux, the same Win32 host path exercised by Native SDK itself can be
+smoke-tested through Wine:
+
+```sh
+sudo apt-get install wine xvfb
+cd NativeApp
+./scripts/windows-wine-smoke.sh
+```
+
+That smoke verifies non-blank Win32 software rendering, account and filter
+input, the `/` keyboard shortcut, and a deterministic screenshot. Provider
+HTTP is covered separately against the native Linux host and emulator because
+Zig 0.16 socket setup currently hits an unsupported Wine AFD option.
 
 ## Native SDK 0.5.3 Linux host limitation
 

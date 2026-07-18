@@ -24,7 +24,7 @@ const shell_views = [_]native_sdk.ShellView{
         .fill = true,
         .role = "Inbox Zero Mail canvas",
         .accessibility_label = "Inbox Zero Mail",
-        .gpu_backend = .metal,
+        .gpu_backend = if (builtin.os.tag == .macos) .metal else .software,
         .gpu_pixel_format = .bgra8_unorm,
         .gpu_present_mode = .timer,
         .gpu_alpha_mode = .@"opaque",
