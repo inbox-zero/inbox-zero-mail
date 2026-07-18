@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=lib/emulator-test-helpers.sh
 source "${SCRIPT_DIR}/lib/emulator-test-helpers.sh"
 
@@ -11,7 +12,9 @@ GOOGLE_CLIENT_ID="inbox-zero-mail-dev"
 GOOGLE_CLIENT_SECRET="inbox-zero-google-secret"
 MICROSOFT_CLIENT_ID="inbox-zero-mail-dev"
 MICROSOFT_CLIENT_SECRET="inbox-zero-microsoft-secret"
-EMULATE_VERSION="${INBOX_ZERO_EMULATE_VERSION:-0.5.0}"
+PINNED_EMULATE_VERSION="$(sed -n 's/.*@inbox-zero\/emulate@\([^ ]*\) start.*/\1/p' "${REPO_DIR}/compose.yaml" | head -1)"
+EMULATE_VERSION="${INBOX_ZERO_EMULATE_VERSION:-${PINNED_EMULATE_VERSION}}"
+[[ -n "${EMULATE_VERSION}" ]] || fail "could not determine the pinned @inbox-zero/emulate version"
 GOOGLE_REDIRECT_URI="${INBOX_ZERO_GOOGLE_REDIRECT_URI:-${GOOGLE_BASE_URL}/oauth/google}"
 MICROSOFT_REDIRECT_URI="${INBOX_ZERO_MICROSOFT_REDIRECT_URI:-${MICROSOFT_BASE_URL}/oauth/microsoft}"
 RUN_ID="${INBOX_ZERO_E2E_RUN_ID:-native-e2e-$(date +%s)-$$}"

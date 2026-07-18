@@ -71,7 +71,10 @@ json_value() {
 const fs = require('node:fs');
 const data = JSON.parse(fs.readFileSync(process.env.JSON_FILE, 'utf8'));
 const value = Function('data', `return (${process.env.JSON_EXPRESSION});`)(data);
-if (value === undefined || value === null) process.exit(2);
+if (value === undefined || value === null) {
+  console.error(`emulator-e2e: JSON value is missing for expression: ${process.env.JSON_EXPRESSION}`);
+  process.exit(2);
+}
 if (typeof value === 'object') process.stdout.write(JSON.stringify(value));
 else process.stdout.write(String(value));
 NODE
@@ -135,7 +138,10 @@ url_query_value() {
   URL_VALUE="${url}" URL_KEY="${key}" node <<'NODE'
 const url = new URL(process.env.URL_VALUE);
 const value = url.searchParams.get(process.env.URL_KEY);
-if (value === null) process.exit(2);
+if (value === null) {
+  console.error(`emulator-e2e: URL is missing query parameter: ${process.env.URL_KEY}`);
+  process.exit(2);
+}
 process.stdout.write(value);
 NODE
 }
