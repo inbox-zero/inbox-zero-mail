@@ -221,7 +221,10 @@ pub fn RuntimeServices(comptime Effects: type) type {
             self.oauth.deinit();
             self.stopAuthorized();
             self.oauth_result_key = null;
-            for (&self.sessions) |*entry| entry.* = .{};
+            for (&self.sessions) |*entry| {
+                std.crypto.secureZero(u8, std.mem.asBytes(entry));
+                entry.* = .{};
+            }
             for (&self.session_auth) |*state| {
                 state.active.store(false, .release);
                 std.crypto.secureZero(u8, std.mem.asBytes(&state.auth));
@@ -339,16 +342,13 @@ pub fn RuntimeServices(comptime Effects: type) type {
         }
 
         fn drainOAuth(self: *Self) void {
-            const completion = self.oauth.takeCompletion() orelse return;
+            var completion = self.oauth.takeCompletion() orelse return;
+            defer std.crypto.secureZero(u8, std.mem.asBytes(&completion));
             const key = self.oauth_result_key orelse return;
             self.oauth_result_key = null;
             switch (completion) {
                 .failed => |message| self.effects.feedHostResult(key, false, message.slice()) catch {},
-                .success => |success_value| {
-                    var success = success_value;
-                    defer std.crypto.secureZero(u8, std.mem.asBytes(&success));
-                    self.completeOAuth(key, &success) catch |err| self.effects.feedHostResult(key, false, errorLabel(err)) catch {};
-                },
+                .success => |*success| self.completeOAuth(key, success) catch |err| self.effects.feedHostResult(key, false, errorLabel(err)) catch {},
             }
         }
 
@@ -474,6 +474,7 @@ pub fn RuntimeServices(comptime Effects: type) type {
             try std.base64.standard.Decoder.decode(decoded[0..decoded_len], stored);
             const metadata = try oauth_wire.decodeAccountResult(decoded[0..decoded_len]);
             var refresh_buffer: [max_credential_secret_bytes]u8 = undefined;
+            defer std.crypto.secureZero(u8, &refresh_buffer);
             const refresh = (try self.getCredential(self.oauthCredentialService(), metadata.session_key, &refresh_buffer)) orelse return error.SessionNotFound;
             const kind: account_domain.ProviderKind = if (metadata.provider == .gmail) .gmail else .microsoft;
             const provider = if (self.oauth_settings.emulate) oauth_config.emulator(kind) else oauth_config.forProvider(kind).*;
@@ -491,6 +492,7 @@ pub fn RuntimeServices(comptime Effects: type) type {
                 .microsoft => if (!self.oauth_settings.emulate) "" else if (self.oauth_settings.microsoft_client_secret.len == 0) "inbox-zero-microsoft-secret" else self.oauth_settings.microsoft_client_secret,
             };
             var auth: oauth_session.Session = .{};
+            defer std.crypto.secureZero(u8, std.mem.asBytes(&auth));
             auth.refresh_token.set(refresh);
             const entry = &self.sessions[index];
             entry.* = .{ .active = true, .provider = kind };
@@ -691,6 +693,7 @@ fn validRestoredMetadata(metadata: oauth_wire.AccountResult, provider: *const oa
     const expected_prefix = if (metadata.provider == .gmail) "gmail:" else "microsoft:";
     return std.mem.eql(u8, metadata.api_base_url, provider.api_base_url) and
         std.mem.startsWith(u8, metadata.session_key, expected_prefix) and
+        std.mem.eql(u8, metadata.session_key[expected_prefix.len..], metadata.provider_account_id) and
         validAccountField(metadata.provider_account_id, 256) and
         validAccountField(metadata.email, 128) and
         validAccountField(metadata.display_name, 96) and
@@ -766,6 +769,8 @@ fn finishAuthorizedFailure(job: *AuthorizedJob, outcome: oauth_wire.TransportOut
 
 fn destroyAuthorizedJob(job: *AuthorizedJob) void {
     const allocator = std.heap.page_allocator;
+    std.crypto.secureZero(u8, job.response);
+    std.crypto.secureZero(u8, job.payload);
     allocator.free(job.response);
     allocator.free(job.payload);
     std.crypto.secureZero(u8, std.mem.asBytes(&job.auth));
@@ -787,6 +792,7 @@ fn runAuthorized(job: *AuthorizedJob) !void {
     if (response.status == 401) {
         try prepareAuthorizedAuth(job, true);
         response = try providerHttp(job, request);
+        try rejectPersistentUnauthorized(response.status);
     }
     const encoded = try oauth_wire.encodeResponse(job.response, .{
         .outcome = .ok,
@@ -795,6 +801,10 @@ fn runAuthorized(job: *AuthorizedJob) !void {
         .body = response.body,
     });
     job.response_len = encoded.len;
+}
+
+fn rejectPersistentUnauthorized(status: u16) !void {
+    if (status == 401) return error.AuthorizationRefreshFailed;
 }
 
 /// Copy a current access token, refreshing under the account's mutex only when
@@ -845,6 +855,7 @@ fn refreshAuthorized(job: *AuthorizedJob) !void {
     const response = try rawHttp(job.io, std.heap.page_allocator, .POST, job.token_url.slice(), &.{.{ .name = "content-type", .value = "application/x-www-form-urlencoded" }}, form, &body_buffer);
     if (response.status < 200 or response.status >= 300 or response.truncated) return error.AuthorizationRefreshFailed;
     var refreshed = oauth_session.parseTokenResponse(std.heap.page_allocator, response.body, std.Io.Clock.real.now(job.io).toMilliseconds()) catch return error.AuthorizationRefreshFailed;
+    defer std.crypto.secureZero(u8, std.mem.asBytes(&refreshed));
     if (refreshed.refresh_token.isEmpty()) refreshed.refresh_token = job.auth.refresh_token;
     job.auth = refreshed;
 }
@@ -917,6 +928,27 @@ test "authorized provider URLs cannot escape an account API origin prefix" {
     try std.testing.expect(!allowedProviderUrl("https://graph.microsoft.com", "http://graph.microsoft.com/v1.0/me"));
     try std.testing.expect(!allowedProviderUrl("https://graph.microsoft.com", "https://graph.microsoft.com:444/v1.0/me"));
     try std.testing.expect(!allowedProviderUrl("https://graph.microsoft.com", "https://graph.microsoft.com/v1.0/me#fragment"));
+}
+
+test "restored account metadata cannot bind one profile to another credential" {
+    const metadata = oauth_wire.AccountResult{
+        .provider = .gmail,
+        .provider_account_id = "subject-a",
+        .email = "a@example.com",
+        .display_name = "Account A",
+        .session_key = "gmail:subject-a",
+        .api_base_url = oauth_config.gmail.api_base_url,
+    };
+    try std.testing.expect(validRestoredMetadata(metadata, &oauth_config.gmail));
+    var mismatched = metadata;
+    mismatched.session_key = "gmail:subject-b";
+    try std.testing.expect(!validRestoredMetadata(mismatched, &oauth_config.gmail));
+}
+
+test "a persistent 401 after refresh requires account reauthorization" {
+    try std.testing.expectError(error.AuthorizationRefreshFailed, rejectPersistentUnauthorized(401));
+    try rejectPersistentUnauthorized(200);
+    try std.testing.expectEqual(oauth_wire.TransportOutcome.authorization_failed, authorizedErrorOutcome(error.AuthorizationRefreshFailed));
 }
 
 test "authorized worker injects bearer and returns framed HTTP response" {

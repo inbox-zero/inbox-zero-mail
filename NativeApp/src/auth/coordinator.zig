@@ -118,6 +118,7 @@ pub const Coordinator = struct {
             future.cancel(io);
         }
         self.finishWorker();
+        std.crypto.secureZero(u8, std.mem.asBytes(&self.completion));
     }
 
     pub fn deinit(self: *Coordinator) void {
@@ -141,6 +142,7 @@ pub const Coordinator = struct {
     fn workerMain(self: *Coordinator) void {
         const Race = union(enum) { completion: Completion, timeout: void };
         var results: [2]Race = undefined;
+        defer std.crypto.secureZero(u8, std.mem.asBytes(&results));
         var race = std.Io.Select(Race).init(self.threaded.?.io(), &results);
         race.concurrent(.completion, runCompletion, .{self}) catch {
             self.completion = failedCompletion("The account could not be connected.");
@@ -192,7 +194,8 @@ pub const Coordinator = struct {
         const token_response = try http(io, self.allocator, .POST, self.provider.token_url, &.{.{ .name = "content-type", .value = "application/x-www-form-urlencoded" }}, form, &token_body);
         if (token_response.status < 200 or token_response.status >= 300 or token_response.truncated) return error.TokenExchangeFailed;
         const now_ms = std.Io.Clock.real.now(io).toMilliseconds();
-        const auth = try session.parseTokenResponse(self.allocator, token_response.body, now_ms);
+        var auth = try session.parseTokenResponse(self.allocator, token_response.body, now_ms);
+        defer std.crypto.secureZero(u8, std.mem.asBytes(&auth));
 
         var authorization_buffer: [session.max_token_bytes + 7]u8 = undefined;
         defer std.crypto.secureZero(u8, &authorization_buffer);
