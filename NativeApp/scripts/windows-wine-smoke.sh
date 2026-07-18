@@ -38,6 +38,7 @@ run_native() {
 cd "${APP_DIR}"
 [[ -s zig-out/bin/inbox-zero-mail-native.exe ]] || fail "Windows executable is missing"
 
+mkdir -p "$(dirname -- "${WINEPREFIX}")"
 # Wine can return a non-zero status while still completing first-run prefix
 # initialization on a headless runner (for example when optional wine32 is
 # absent). The readiness assertion below is the authoritative launch check.
