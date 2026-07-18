@@ -91,12 +91,21 @@ test "boot starts all configured account fetches through fake effects" {
     defer fx.deinit();
     fx.executor = .fake;
     main.boot(&model, &fx);
-    try std.testing.expectEqual(@as(usize, 3), fx.pendingFetchCount());
-    for (0..3) |index| {
+    try std.testing.expectEqual(@as(usize, 5), fx.pendingFetchCount());
+    var gmail_requests: usize = 0;
+    var outlook_folder_requests: usize = 0;
+    for (0..5) |index| {
         const request = fx.pendingFetchAt(index) orelse return error.FetchNotFound;
         try std.testing.expect(request.url.len > 0);
         try std.testing.expectEqual(std.http.Method.GET, request.method);
+        if (std.mem.indexOf(u8, request.url, "/gmail/v1/") != null) {
+            gmail_requests += 1;
+            try std.testing.expect(std.mem.indexOf(u8, request.url, "labelIds=INBOX") == null);
+        }
+        if (std.mem.indexOf(u8, request.url, "/mailFolders/") != null) outlook_folder_requests += 1;
     }
+    try std.testing.expectEqual(@as(usize, 2), gmail_requests);
+    try std.testing.expectEqual(@as(usize, 3), outlook_folder_requests);
 }
 
 test "selected messages can be declared as independent windows" {

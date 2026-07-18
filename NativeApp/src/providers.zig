@@ -80,6 +80,9 @@ const OutlookMessageList = struct {
     value: []const OutlookMessage,
 };
 
+const OutlookFolder = enum { inbox, archive, trash };
+const outlook_folders = [_]OutlookFolder{ .inbox, .archive, .trash };
+
 const OutlookMutationReceipt = struct {
     id: ?[]const u8 = null,
 };
@@ -91,17 +94,25 @@ pub fn startInitialSync(model: *mail.Model, fx: anytype, on_response: anytype) v
         account.gmail_ref_count = 0;
         account.gmail_next_ref = 0;
         account.gmail_in_flight = false;
+        account.outlook_pending = 0;
         account.error_message = .{};
         var url_buffer: [512]u8 = undefined;
-        const url = switch (account.provider) {
-            .gmail => std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads?maxResults=50&labelIds=INBOX", .{account.baseUrl()}) catch {
+        if (account.provider == .microsoft) {
+            account.outlook_pending = outlook_folders.len;
+            for (outlook_folders, 0..) |folder, folder_index| {
+                const url = std.fmt.bufPrint(&url_buffer, "{s}/v1.0/me/mailFolders/{s}/messages?%24top=50&%24orderby=receivedDateTime%20desc", .{ account.baseUrl(), outlookFolderPath(folder) }) catch {
+                    account.sync_state = .failed;
+                    account.outlook_pending = 0;
+                    break;
+                };
+                const key = generation * generation_key_stride + initial_key_base + folder_index * mail.max_accounts + index;
+                fetchAuthorized(fx, key, .GET, url, account.tokenSlice(), "", on_response);
+            }
+            continue;
+        }
+        const url = std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads?maxResults=50", .{account.baseUrl()}) catch {
                 account.sync_state = .failed;
                 continue;
-            },
-            .microsoft => std.fmt.bufPrint(&url_buffer, "{s}/v1.0/me/messages?%24top=50&%24orderby=receivedDateTime%20desc", .{account.baseUrl()}) catch {
-                account.sync_state = .failed;
-                continue;
-            },
         };
         fetchAuthorized(fx, generation * generation_key_stride + initial_key_base + index, .GET, url, account.tokenSlice(), "", on_response);
     }
@@ -112,29 +123,44 @@ pub fn handleInitialResponse(model: *mail.Model, response: native_sdk.EffectResp
     if (generation != model.sync_generation) return;
     const local_key = response.key % generation_key_stride;
     if (local_key < initial_key_base or local_key >= gmail_detail_key_base) return;
-    const account_index: usize = @intCast(local_key - initial_key_base);
+    const encoded = local_key - initial_key_base;
+    const folder_index: usize = @intCast(encoded / mail.max_accounts);
+    const account_index: usize = @intCast(encoded % mail.max_accounts);
     if (account_index >= model.account_count) return;
     const account = &model.accounts[account_index];
     if (!responseOk(response)) {
-        failAccount(account, "Initial provider sync failed.");
+        if (account.provider == .microsoft and account.outlook_pending > 0) {
+            account.outlook_pending -= 1;
+            account.error_message.set("One or more Outlook folders could not be loaded.");
+            finishOutlookSync(model, account);
+        } else {
+            failAccount(account, "Initial provider sync failed.");
+        }
+        updateSyncStatus(model);
         return;
     }
     switch (account.provider) {
         .gmail => {
             parseGmailList(account, response.body) catch {
                 failAccount(account, "Gmail returned an unreadable thread list.");
+                updateSyncStatus(model);
                 return;
             };
             scheduleNextGmailDetail(model, account_index, fx, detail_response);
         },
         .microsoft => {
-            parseOutlookMessages(model, account_index, response.body) catch {
-                failAccount(account, "Outlook returned unreadable messages.");
+            if (folder_index >= outlook_folders.len) return;
+            parseOutlookMessages(model, account_index, outlook_folders[folder_index], response.body) catch {
+                if (account.outlook_pending > 0) account.outlook_pending -= 1;
+                account.error_message.set("One or more Outlook folders were unreadable.");
+                finishOutlookSync(model, account);
+                updateSyncStatus(model);
                 return;
             };
-            account.sync_state = .ready;
+            if (account.outlook_pending > 0) account.outlook_pending -= 1;
+            finishOutlookSync(model, account);
             model.reconcileSelection();
-            model.status_message.set("Gmail and Outlook are connected.");
+            updateSyncStatus(model);
         },
     }
 }
@@ -150,15 +176,20 @@ pub fn handleGmailDetailResponse(model: *mail.Model, response: native_sdk.Effect
     const account = &model.accounts[account_index];
     account.gmail_in_flight = false;
     if (!responseOk(response)) {
-        failAccount(account, "A Gmail thread could not be loaded.");
+        account.error_message.set("One or more Gmail threads could not be loaded.");
+        scheduleNextGmailDetail(model, account_index, fx, detail_response);
+        updateSyncStatus(model);
         return;
     }
     parseGmailThread(model, account_index, response.body) catch {
-        failAccount(account, "Gmail returned an unreadable thread.");
+        account.error_message.set("One or more Gmail threads were unreadable.");
+        scheduleNextGmailDetail(model, account_index, fx, detail_response);
+        updateSyncStatus(model);
         return;
     };
     scheduleNextGmailDetail(model, account_index, fx, detail_response);
     model.reconcileSelection();
+    updateSyncStatus(model);
 }
 
 pub fn fetchMutation(fx: anytype, key: u64, provider: mail.ProviderKind, operation: MutationOperation, account: *const mail.Account, thread: *const mail.MailThread, on_response: anytype) bool {
@@ -198,10 +229,11 @@ const MutationRequest = struct {
 };
 
 fn gmailMutationRequest(operation: MutationOperation, account: *const mail.Account, thread: *const mail.MailThread, url_buffer: []u8, body_buffer: []u8) !MutationRequest {
-    const url = try std.fmt.bufPrint(url_buffer, "{s}/gmail/v1/users/me/threads/{s}/modify", .{ account.baseUrl(), thread.providerThreadID() });
+    const action = if (operation == .trash) "trash" else "modify";
+    const url = try std.fmt.bufPrint(url_buffer, "{s}/gmail/v1/users/me/threads/{s}/{s}", .{ account.baseUrl(), thread.providerThreadID(), action });
     const body = switch (operation) {
         .archive => try std.fmt.bufPrint(body_buffer, "{{\"addLabelIds\":[],\"removeLabelIds\":[\"INBOX\"]}}", .{}),
-        .trash => try std.fmt.bufPrint(body_buffer, "{{\"addLabelIds\":[\"TRASH\"],\"removeLabelIds\":[\"INBOX\"]}}", .{}),
+        .trash => try std.fmt.bufPrint(body_buffer, "{{}}", .{}),
         .toggle_read => if (thread.unread)
             try std.fmt.bufPrint(body_buffer, "{{\"addLabelIds\":[],\"removeLabelIds\":[\"UNREAD\"]}}", .{})
         else
@@ -261,8 +293,8 @@ fn scheduleNextGmailDetail(model: *mail.Model, account_index: usize, fx: anytype
     const account = &model.accounts[account_index];
     if (account.gmail_in_flight) return;
     if (account.gmail_next_ref >= account.gmail_ref_count) {
-        account.sync_state = .ready;
-        model.status_message.set("Gmail and Outlook are connected.");
+        account.sync_state = if (account.error_message.isEmpty()) .ready else .partial;
+        updateSyncStatus(model);
         return;
     }
     const ref_index = account.gmail_next_ref;
@@ -272,6 +304,7 @@ fn scheduleNextGmailDetail(model: *mail.Model, account_index: usize, fx: anytype
     var url_buffer: [512]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads/{s}?format=full", .{ account.baseUrl(), reference.id.slice() }) catch {
         failAccount(account, "Could not build a Gmail detail URL.");
+        updateSyncStatus(model);
         return;
     };
     const key = model.sync_generation * generation_key_stride + gmail_detail_key_base + account_index * 100 + ref_index;
@@ -320,12 +353,15 @@ pub fn parseGmailThread(model: *mail.Model, account_index: usize, body: []const 
     _ = model.addThread(thread);
 }
 
-pub fn parseOutlookMessages(model: *mail.Model, account_index: usize, body: []const u8) !void {
+pub fn parseOutlookMessages(model: *mail.Model, account_index: usize, folder: OutlookFolder, body: []const u8) !void {
     const parsed = try std.json.parseFromSlice(OutlookMessageList, std.heap.page_allocator, body, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
     for (parsed.value.value) |message| {
         var thread = mail.MailThread{ .account_index = account_index, .provider = .microsoft };
-        thread.provider_thread_id.set(message.conversationId);
+        // Treat Graph messages as independent rows. A conversation can span
+        // inbox, sent, archive, and trash, so collapsing by conversationId
+        // would lose folder/read state and make later mutations ambiguous.
+        thread.provider_thread_id.set(message.id);
         thread.provider_message_id.set(message.id);
         thread.subject.set(message.subject orelse "(No subject)");
         if (message.from) |sender| {
@@ -337,10 +373,9 @@ pub fn parseOutlookMessages(model: *mail.Model, account_index: usize, body: []co
         thread.received_at.set(message.receivedDateTime orelse "");
         thread.unread = !(message.isRead orelse false);
         thread.starred = if (message.flag) |flag| std.mem.eql(u8, flag.flagStatus orelse "", "flagged") else false;
-        const folder = message.parentFolderId orelse "inbox";
-        thread.in_inbox = std.ascii.eqlIgnoreCase(folder, "inbox");
-        thread.trashed = std.ascii.eqlIgnoreCase(folder, "deleteditems");
-        thread.archived = std.ascii.eqlIgnoreCase(folder, "archive");
+        thread.in_inbox = folder == .inbox;
+        thread.trashed = folder == .trash;
+        thread.archived = folder == .archive;
         if (message.body) |message_body| {
             if (std.ascii.eqlIgnoreCase(message_body.contentType, "html")) {
                 var plain_buffer: [8192]u8 = undefined;
@@ -363,6 +398,41 @@ fn failAccount(account: *mail.Account, message: []const u8) void {
     account.sync_state = .failed;
     account.gmail_in_flight = false;
     account.error_message.set(message);
+}
+
+fn finishOutlookSync(model: *mail.Model, account: *mail.Account) void {
+    if (account.outlook_pending != 0) return;
+    account.sync_state = if (account.error_message.isEmpty()) .ready else .partial;
+    updateSyncStatus(model);
+}
+
+fn outlookFolderPath(folder: OutlookFolder) []const u8 {
+    return switch (folder) {
+        .inbox => "inbox",
+        .archive => "archive",
+        .trash => "deleteditems",
+    };
+}
+
+fn updateSyncStatus(model: *mail.Model) void {
+    var loading = false;
+    var failed = false;
+    var partial = false;
+    for (model.accounts[0..model.account_count]) |account| switch (account.sync_state) {
+        .idle, .loading => loading = true,
+        .failed => failed = true,
+        .partial => partial = true,
+        .ready => {},
+    };
+    if (loading) {
+        model.status_message.set("Synchronizing Gmail and Outlook.");
+    } else if (failed) {
+        model.status_message.set("Some accounts could not synchronize.");
+    } else if (partial) {
+        model.status_message.set("Connected with partial mail results.");
+    } else {
+        model.status_message.set("Gmail and Outlook are connected.");
+    }
 }
 
 fn hasLabel(labels: ?[]const []const u8, wanted: []const u8) bool {
@@ -435,13 +505,15 @@ test "gmail parser maps headers labels and decoded body" {
 test "outlook parser strips html and maps flags" {
     var model = mail.initialModel();
     const fixture =
-        \\{"value":[{"id":"message-1","conversationId":"conversation-1","subject":"Microsoft follow up","bodyPreview":"Ready","body":{"contentType":"html","content":"<p>Outlook <strong>ready</strong>.</p>"},"from":{"emailAddress":{"address":"alerts@example.com","name":"Alerts"}},"parentFolderId":"inbox","isRead":false,"flag":{"flagStatus":"flagged"}}]}
+        \\{"value":[{"id":"message-1","conversationId":"conversation-1","subject":"Microsoft follow up","bodyPreview":"Ready","body":{"contentType":"html","content":"<p>Outlook <strong>ready</strong>.</p>"},"from":{"emailAddress":{"address":"alerts@example.com","name":"Alerts"}},"parentFolderId":"opaque-real-graph-folder-id","isRead":false,"flag":{"flagStatus":"flagged"}}]}
     ;
-    try parseOutlookMessages(&model, 2, fixture);
+    try parseOutlookMessages(&model, 2, .archive, fixture);
     try std.testing.expectEqual(@as(usize, 1), model.thread_count);
     try std.testing.expectEqualStrings("Microsoft follow up", model.threads[0].subjectSlice());
     try std.testing.expect(mail.containsAsciiIgnoreCase(model.threads[0].bodySlice(), "Outlook ready"));
     try std.testing.expect(model.threads[0].starred);
+    try std.testing.expect(model.threads[0].archived);
+    try std.testing.expect(!model.threads[0].in_inbox);
 }
 
 test "stale sync responses are ignored after refresh" {
@@ -472,4 +544,27 @@ test "outlook move response keeps the replacement message id" {
     handleMutationResponse(&model, response);
     try std.testing.expectEqualStrings("new-message", model.threads[0].providerMessageID());
     try std.testing.expect(!model.pending_mutations[0].active);
+}
+
+test "gmail trash uses the canonical thread trash endpoint" {
+    var account = mail.Account{ .provider = .gmail };
+    account.base_url.set("http://127.0.0.1:4402");
+    var thread = mail.MailThread{ .provider = .gmail };
+    thread.provider_thread_id.set("thread-trash");
+    var url_buffer: [512]u8 = undefined;
+    var body_buffer: [512]u8 = undefined;
+    const request = try gmailMutationRequest(.trash, &account, &thread, &url_buffer, &body_buffer);
+    try std.testing.expectEqualStrings("http://127.0.0.1:4402/gmail/v1/users/me/threads/thread-trash/trash", request.url);
+    try std.testing.expectEqualStrings("{}", request.body);
+}
+
+test "outlook messages in one conversation remain independent rows" {
+    var model = mail.initialModel();
+    const fixture =
+        \\{"value":[{"id":"new","conversationId":"shared","subject":"New","receivedDateTime":"2026-07-18T10:00:00Z","parentFolderId":"inbox"},{"id":"old","conversationId":"shared","subject":"Old","receivedDateTime":"2026-07-18T09:00:00Z","parentFolderId":"archive"}]}
+    ;
+    try parseOutlookMessages(&model, 2, .inbox, fixture);
+    try std.testing.expectEqual(@as(usize, 2), model.thread_count);
+    try std.testing.expectEqualStrings("new", model.threads[0].providerThreadID());
+    try std.testing.expectEqualStrings("old", model.threads[1].providerThreadID());
 }

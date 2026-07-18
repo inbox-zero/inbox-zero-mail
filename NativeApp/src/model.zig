@@ -5,7 +5,7 @@ const canvas = native_sdk.canvas;
 
 pub const max_accounts = 4;
 pub const max_threads = 128;
-pub const max_gmail_refs = 48;
+pub const max_gmail_refs = 50;
 pub const no_index = std.math.maxInt(usize);
 
 pub fn Text(comptime capacity: usize) type {
@@ -33,7 +33,7 @@ pub fn Text(comptime capacity: usize) type {
 }
 
 pub const ProviderKind = enum { gmail, microsoft };
-pub const AccountSyncState = enum { idle, loading, ready, failed };
+pub const AccountSyncState = enum { idle, loading, ready, partial, failed };
 pub const InboxFilter = enum { all, unread, starred, snoozed, archive, trash };
 
 pub const GmailRef = struct {
@@ -51,6 +51,7 @@ pub const Account = struct {
     gmail_ref_count: usize = 0,
     gmail_next_ref: usize = 0,
     gmail_in_flight: bool = false,
+    outlook_pending: usize = 0,
     error_message: Text(160) = .{},
 
     pub fn emailSlice(self: *const Account) []const u8 {
