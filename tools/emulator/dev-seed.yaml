@@ -1,3 +1,31 @@
+tokens:
+  inbox_zero_native_alpha:
+    login: alpha.inbox@example.com
+    scopes:
+      - openid
+      - email
+      - profile
+      - https://www.googleapis.com/auth/gmail.modify
+      - https://www.googleapis.com/auth/gmail.send
+  inbox_zero_native_beta:
+    login: beta.inbox@example.com
+    scopes:
+      - openid
+      - email
+      - profile
+      - https://www.googleapis.com/auth/gmail.modify
+      - https://www.googleapis.com/auth/gmail.send
+  inbox_zero_native_gamma:
+    login: gamma.outlook@example.com
+    scopes:
+      - openid
+      - email
+      - profile
+      - offline_access
+      - User.Read
+      - Mail.ReadWrite
+      - Mail.Send
+
 google:
   users:
     - email: alpha.inbox@example.com

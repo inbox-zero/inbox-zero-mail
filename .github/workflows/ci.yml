@@ -11,6 +11,35 @@ permissions:
   contents: read
 
 jobs:
+  native-sdk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: NativeApp
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+
+      - name: Run Native SDK tests
+        shell: bash
+        run: npx --yes @native-sdk/cli@0.5.3 test . --yes
+
+      - name: Validate Native markup and model bindings
+        shell: bash
+        run: npx --yes @native-sdk/cli@0.5.3 check . --strict
+
+      - name: Cross-build Windows client
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes @native-sdk/cli@0.5.3 build . --yes \
+            -Dtarget=x86_64-windows-gnu \
+            -Dplatform=windows
+          test -s zig-out/bin/inbox-zero-mail-native.exe
+
   package-tests:
     runs-on: macos-15
     steps:
