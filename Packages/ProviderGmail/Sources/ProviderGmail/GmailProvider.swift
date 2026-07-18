@@ -562,9 +562,7 @@ private extension GmailProvider {
             "refresh_token": refreshToken,
             "client_id": configuration.clientID,
         ]
-        if environment.kind == .emulator {
-            params["client_secret"] = configuration.emulatorClientSecret
-        } else if let clientSecret = configuration.clientSecret {
+        if let clientSecret = configuration.resolvedRefreshClientSecret() {
             params["client_secret"] = clientSecret
         }
         request.httpBody = formURLEncodedBody(params)
@@ -975,6 +973,12 @@ extension GmailProviderConfiguration {
         }
         let path = environment.kind == .emulator ? "oauth2/token" : "o/oauth2/token"
         return authBaseURL.appending(path: path)
+    }
+
+    func resolvedRefreshClientSecret() -> String? {
+        let secret = environment.kind == .emulator ? emulatorClientSecret : clientSecret
+        guard let secret, secret.isEmpty == false else { return nil }
+        return secret
     }
 }
 

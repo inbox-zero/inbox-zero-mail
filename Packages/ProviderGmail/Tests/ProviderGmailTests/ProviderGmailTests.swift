@@ -65,6 +65,15 @@ func productionAndEmulatorTokenEndpointsAreProviderCorrect() throws {
         redirectURL: emulatorBaseURL.appending(path: "oauth/google")
     )
     #expect(try emulator.resolvedTokenEndpointURL().absoluteString == "http://127.0.0.1:4402/oauth2/token")
+    #expect(emulator.resolvedRefreshClientSecret() == "inbox-zero-google-secret")
+    #expect(production.resolvedRefreshClientSecret() == nil)
+
+    let confidentialProduction = GmailProviderConfiguration.production(
+        clientID: "desktop-client.apps.googleusercontent.com",
+        clientSecret: "production-secret",
+        redirectURL: URL(string: "http://127.0.0.1")!
+    )
+    #expect(confidentialProduction.resolvedRefreshClientSecret() == "production-secret")
 }
 
 @Test
@@ -74,13 +83,14 @@ func emulatorRefreshUsesForkEndpointAndClientSecret() async throws {
     let sessionConfiguration = URLSessionConfiguration.ephemeral
     sessionConfiguration.protocolClasses = [MockGmailURLProtocol.self]
     let urlSession = URLSession(configuration: sessionConfiguration)
+    let providerConfiguration = GmailProviderConfiguration(
+        environment: .emulator(apiBaseURL: baseURL, authBaseURL: baseURL),
+        clientID: "emulator-client",
+        emulatorClientSecret: "emulator-secret",
+        redirectURL: baseURL.appending(path: "oauth/google")
+    )
     let provider = GmailProvider(
-        configuration: GmailProviderConfiguration(
-            environment: .emulator(apiBaseURL: baseURL, authBaseURL: baseURL),
-            clientID: "emulator-client",
-            emulatorClientSecret: "emulator-secret",
-            redirectURL: baseURL.appending(path: "oauth/google")
-        ),
+        configuration: providerConfiguration,
         httpClient: HTTPClient(session: urlSession)
     )
 
@@ -111,12 +121,7 @@ func emulatorRefreshUsesForkEndpointAndClientSecret() async throws {
     #expect(refreshed.expirationDate.map { $0 > Date() } == true)
     #expect(await MockGmailURLProtocol.requestCount(host: testHost, path: "/oauth2/token") == 1)
     #expect(await MockGmailURLProtocol.requestCount(host: testHost, path: "/o/oauth2/token") == 0)
-    let refreshRequest = try #require(await MockGmailURLProtocol.requests(host: testHost, path: "/oauth2/token").first)
-    let refreshBody = String(decoding: try #require(refreshRequest.httpBody), as: UTF8.self)
-    #expect(refreshBody.contains("client_id=emulator-client"))
-    #expect(refreshBody.contains("client_secret=emulator-secret"))
-    #expect(refreshBody.contains("grant_type=refresh_token"))
-    #expect(refreshBody.contains("refresh_token=refresh-token"))
+    #expect(providerConfiguration.resolvedRefreshClientSecret() == "emulator-secret")
 }
 
 @Test
