@@ -248,6 +248,8 @@ microsoft:
         - inboxzeromail://oauth/microsoft
         - http://localhost:4001/oauth/microsoft
         - http://localhost:4003/oauth/microsoft
+        - http://127.0.0.1:4001/oauth/microsoft
+        - http://127.0.0.1:4003/oauth/microsoft
         - http://localhost:4403/oauth/microsoft
         - http://127.0.0.1/oauth/microsoft
   categories:

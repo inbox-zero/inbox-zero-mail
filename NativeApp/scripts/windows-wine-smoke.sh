@@ -45,7 +45,7 @@ mkdir -p "$(dirname -- "${WINEPREFIX}")"
 wineboot --init >"${APP_LOG}" 2>&1 || true
 wineserver --wait >/dev/null 2>&1 || true
 rm -rf "${AUTOMATION_DIR}"
-wine zig-out/bin/inbox-zero-mail-native.exe >>"${APP_LOG}" 2>&1 &
+INBOX_ZERO_EMULATE=1 wine zig-out/bin/inbox-zero-mail-native.exe >>"${APP_LOG}" 2>&1 &
 app_pid=$!
 
 run_native automate wait --timeout-ms 180000 >/dev/null || fail "app did not publish an automation snapshot"
@@ -66,6 +66,9 @@ run_native automate assert --timeout-ms 5000 'role=button name="archive".*select
 run_native automate widget-click mail-canvas "${alpha_id}" >/dev/null
 run_native automate assert --timeout-ms 5000 'role=listitem name="Alpha Inbox".*selected' >/dev/null \
   || fail "account click did not update state"
+run_native automate widget-key mail-canvas d >/dev/null
+run_native automate assert --timeout-ms 5000 'Saved drafts' 'saved drafts' >/dev/null \
+  || fail "draft keyboard shortcut did not open the saved-drafts view"
 run_native automate widget-key mail-canvas / >/dev/null
 run_native automate assert --timeout-ms 5000 'role=textbox name="Search mail".*focused=true' >/dev/null \
   || fail "keyboard shortcut did not focus search"

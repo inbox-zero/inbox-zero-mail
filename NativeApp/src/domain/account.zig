@@ -15,6 +15,11 @@ pub const Account = struct {
     provider: ProviderKind = .gmail,
     email: text.Text(128) = .{},
     display_name: text.Text(96) = .{},
+    provider_account_id: text.Text(256) = .{},
+    credential_key: text.Text(256) = .{},
+    /// Short development-only identity used by the explicit emulator profile.
+    /// Production tokens never enter the app model; the native runtime keeps
+    /// them behind `credential_key` and injects authorization on host requests.
     token: text.Text(160) = .{},
     base_url: text.Text(192) = .{},
     sync_state: AccountSyncState = .idle,

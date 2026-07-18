@@ -1,6 +1,7 @@
 const std = @import("std");
 const native_sdk = @import("native_sdk");
 const mail = @import("model.zig");
+const transport = @import("platform/effects_transport.zig");
 
 pub const initial_key_base: u64 = 100;
 pub const gmail_detail_key_base: u64 = 1_000;
@@ -108,7 +109,7 @@ const OutlookMutationReceipt = struct {
     id: ?[]const u8 = null,
 };
 
-pub fn startInitialSync(model: *mail.Model, fx: anytype, on_response: anytype) void {
+pub fn startInitialSync(model: *mail.Model, fx: anytype, on_response: anytype, on_authorized_response: anytype) void {
     const generation = model.resetForSync();
     model.resetRemoteDrafts();
     for (model.accounts[0..model.account_count], 0..) |*account, index| {
@@ -133,7 +134,7 @@ pub fn startInitialSync(model: *mail.Model, fx: anytype, on_response: anytype) v
                     break;
                 };
                 const key = generation * generation_key_stride + initial_key_base + folder_index * mail.max_accounts + index;
-                fetchAuthorized(fx, key, .GET, url, account.tokenSlice(), "", on_response);
+                fetchAuthorized(fx, key, .GET, url, account, "", on_response, on_authorized_response);
             }
             continue;
         }
@@ -141,18 +142,18 @@ pub fn startInitialSync(model: *mail.Model, fx: anytype, on_response: anytype) v
             account.sync_state = .failed;
             continue;
         };
-        fetchAuthorized(fx, generation * generation_key_stride + initial_key_base + index, .GET, url, account.tokenSlice(), "", on_response);
+        fetchAuthorized(fx, generation * generation_key_stride + initial_key_base + index, .GET, url, account, "", on_response, on_authorized_response);
         const drafts_url = std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/drafts?maxResults=50", .{account.baseUrl()}) catch {
             account.error_message.set("Could not build the Gmail drafts URL.");
             account.gmail_drafts_done = true;
             continue;
         };
         const draft_key = generation * generation_key_stride + initial_key_base + gmail_draft_list_folder_index * mail.max_accounts + index;
-        fetchAuthorized(fx, draft_key, .GET, drafts_url, account.tokenSlice(), "", on_response);
+        fetchAuthorized(fx, draft_key, .GET, drafts_url, account, "", on_response, on_authorized_response);
     }
 }
 
-pub fn handleInitialResponse(model: *mail.Model, response: native_sdk.EffectResponse, fx: anytype, detail_response: anytype) void {
+pub fn handleInitialResponse(model: *mail.Model, response: native_sdk.EffectResponse, fx: anytype, detail_response: anytype, authorized_detail_response: anytype) void {
     const generation = response.key / generation_key_stride;
     if (generation != model.sync_generation) return;
     const local_key = response.key % generation_key_stride;
@@ -187,7 +188,7 @@ pub fn handleInitialResponse(model: *mail.Model, response: native_sdk.EffectResp
                     updateSyncStatus(model);
                     return;
                 };
-                scheduleNextGmailDraftDetail(model, account_index, fx, detail_response);
+                scheduleNextGmailDraftDetail(model, account_index, fx, detail_response, authorized_detail_response);
             } else {
                 parseGmailList(account, response.body) catch {
                     account.error_message.set("Gmail returned an unreadable thread list.");
@@ -196,7 +197,7 @@ pub fn handleInitialResponse(model: *mail.Model, response: native_sdk.EffectResp
                     updateSyncStatus(model);
                     return;
                 };
-                scheduleNextGmailDetail(model, account_index, fx, detail_response);
+                scheduleNextGmailDetail(model, account_index, fx, detail_response, authorized_detail_response);
             }
         },
         .microsoft => {
@@ -221,7 +222,7 @@ pub fn handleInitialResponse(model: *mail.Model, response: native_sdk.EffectResp
     }
 }
 
-pub fn handleGmailDetailResponse(model: *mail.Model, response: native_sdk.EffectResponse, fx: anytype, detail_response: anytype) void {
+pub fn handleGmailDetailResponse(model: *mail.Model, response: native_sdk.EffectResponse, fx: anytype, detail_response: anytype, authorized_detail_response: anytype) void {
     const generation = response.key / generation_key_stride;
     if (generation != model.sync_generation) return;
     const local_key = response.key % generation_key_stride;
@@ -235,41 +236,41 @@ pub fn handleGmailDetailResponse(model: *mail.Model, response: native_sdk.Effect
     if (!responseOk(response)) {
         account.error_message.set(if (is_draft) "One or more Gmail drafts could not be loaded." else "One or more Gmail threads could not be loaded.");
         if (is_draft)
-            scheduleNextGmailDraftDetail(model, account_index, fx, detail_response)
+            scheduleNextGmailDraftDetail(model, account_index, fx, detail_response, authorized_detail_response)
         else
-            scheduleNextGmailDetail(model, account_index, fx, detail_response);
+            scheduleNextGmailDetail(model, account_index, fx, detail_response, authorized_detail_response);
         updateSyncStatus(model);
         return;
     }
     if (is_draft) {
         parseGmailDraft(model, account_index, response.body) catch {
             account.error_message.set("One or more Gmail drafts were unreadable.");
-            scheduleNextGmailDraftDetail(model, account_index, fx, detail_response);
+            scheduleNextGmailDraftDetail(model, account_index, fx, detail_response, authorized_detail_response);
             updateSyncStatus(model);
             return;
         };
-        scheduleNextGmailDraftDetail(model, account_index, fx, detail_response);
+        scheduleNextGmailDraftDetail(model, account_index, fx, detail_response, authorized_detail_response);
     } else {
         parseGmailThread(model, account_index, response.body) catch {
             account.error_message.set("One or more Gmail threads were unreadable.");
-            scheduleNextGmailDetail(model, account_index, fx, detail_response);
+            scheduleNextGmailDetail(model, account_index, fx, detail_response, authorized_detail_response);
             updateSyncStatus(model);
             return;
         };
-        scheduleNextGmailDetail(model, account_index, fx, detail_response);
+        scheduleNextGmailDetail(model, account_index, fx, detail_response, authorized_detail_response);
     }
     model.reconcileSelection();
     updateSyncStatus(model);
 }
 
-pub fn fetchMutation(fx: anytype, key: u64, provider: mail.ProviderKind, operation: MutationOperation, account: *const mail.Account, thread: *const mail.MailThread, on_response: anytype) bool {
+pub fn fetchMutation(fx: anytype, key: u64, provider: mail.ProviderKind, operation: MutationOperation, account: *const mail.Account, thread: *const mail.MailThread, on_response: anytype, on_authorized_response: anytype) bool {
     var url_buffer: [512]u8 = undefined;
     var body_buffer: [512]u8 = undefined;
     const request = switch (provider) {
         .gmail => gmailMutationRequest(operation, account, thread, &url_buffer, &body_buffer),
         .microsoft => outlookMutationRequest(operation, account, thread, &url_buffer, &body_buffer),
     } catch return false;
-    fetchAuthorized(fx, key, request.method, request.url, account.tokenSlice(), request.body, on_response);
+    fetchAuthorized(fx, key, request.method, request.url, account, request.body, on_response, on_authorized_response);
     return true;
 }
 
@@ -339,28 +340,16 @@ fn outlookMutationRequest(operation: MutationOperation, account: *const mail.Acc
     }
 }
 
-fn fetchAuthorized(fx: anytype, key: u64, method: std.http.Method, url: []const u8, token: []const u8, body: []const u8, on_response: anytype) void {
-    var authorization_buffer: [256]u8 = undefined;
-    const authorization = std.fmt.bufPrint(&authorization_buffer, "Bearer {s}", .{token}) catch return;
-    const headers = if (body.len > 0)
-        &[_]std.http.Header{
-            .{ .name = "authorization", .value = authorization },
-            .{ .name = "content-type", .value = "application/json" },
-        }
-    else
-        &[_]std.http.Header{.{ .name = "authorization", .value = authorization }};
-    fx.fetch(.{
-        .key = key,
+fn fetchAuthorized(fx: anytype, key: u64, method: std.http.Method, url: []const u8, account: *const mail.Account, body: []const u8, on_response: anytype, on_authorized_response: anytype) void {
+    _ = transport.fetchAuthorized(fx, key, .{
         .method = method,
         .url = url,
-        .headers = headers,
+        .content_type = if (body.len > 0) "application/json" else null,
         .body = if (body.len > 0) body else null,
-        .timeout_ms = 15_000,
-        .on_response = on_response,
-    });
+    }, account.tokenSlice(), account.credential_key.slice(), on_response, on_authorized_response);
 }
 
-fn scheduleNextGmailDetail(model: *mail.Model, account_index: usize, fx: anytype, detail_response: anytype) void {
+fn scheduleNextGmailDetail(model: *mail.Model, account_index: usize, fx: anytype, detail_response: anytype, authorized_detail_response: anytype) void {
     const account = &model.accounts[account_index];
     if (account.gmail_in_flight) return;
     if (account.gmail_next_ref >= account.gmail_ref_count) {
@@ -380,10 +369,10 @@ fn scheduleNextGmailDetail(model: *mail.Model, account_index: usize, fx: anytype
         return;
     };
     const key = model.sync_generation * generation_key_stride + gmail_detail_key_base + account_index * 100 + ref_index;
-    fetchAuthorized(fx, key, .GET, url, account.tokenSlice(), "", detail_response);
+    fetchAuthorized(fx, key, .GET, url, account, "", detail_response, authorized_detail_response);
 }
 
-fn scheduleNextGmailDraftDetail(model: *mail.Model, account_index: usize, fx: anytype, detail_response: anytype) void {
+fn scheduleNextGmailDraftDetail(model: *mail.Model, account_index: usize, fx: anytype, detail_response: anytype, authorized_detail_response: anytype) void {
     const account = &model.accounts[account_index];
     if (account.gmail_draft_in_flight) return;
     if (account.gmail_draft_next_ref >= account.gmail_draft_ref_count) {
@@ -405,7 +394,7 @@ fn scheduleNextGmailDraftDetail(model: *mail.Model, account_index: usize, fx: an
         return;
     };
     const key = model.sync_generation * generation_key_stride + gmail_draft_detail_key_base + account_index * 100 + ref_index;
-    fetchAuthorized(fx, key, .GET, url, account.tokenSlice(), "", detail_response);
+    fetchAuthorized(fx, key, .GET, url, account, "", detail_response, authorized_detail_response);
 }
 
 fn parseGmailList(account: *mail.Account, body: []const u8) !void {
@@ -763,14 +752,14 @@ test "stale sync responses are ignored after refresh" {
     var fx = @import("main.zig").Effects.init(std.testing.allocator);
     defer fx.deinit();
     fx.executor = .fake;
-    startInitialSync(&model, &fx, @import("main.zig").Effects.responseMsg(.initial_response));
+    startInitialSync(&model, &fx, @import("main.zig").Effects.responseMsg(.initial_response), @import("main.zig").Effects.hostMsg(.authorized_initial_response));
     const first_generation = model.sync_generation;
-    startInitialSync(&model, &fx, @import("main.zig").Effects.responseMsg(.initial_response));
+    startInitialSync(&model, &fx, @import("main.zig").Effects.responseMsg(.initial_response), @import("main.zig").Effects.hostMsg(.authorized_initial_response));
     try std.testing.expect(model.sync_generation != first_generation);
 
     var response = native_sdk.EffectResponse{ .key = first_generation * generation_key_stride + initial_key_base, .outcome = .ok, .status = 200 };
     response.body = "{\"threads\":[]}";
-    handleInitialResponse(&model, response, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response));
+    handleInitialResponse(&model, response, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
     try std.testing.expectEqual(.loading, model.accounts[0].sync_state);
 }
 

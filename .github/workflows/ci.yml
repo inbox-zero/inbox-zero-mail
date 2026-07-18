@@ -116,6 +116,10 @@ jobs:
         shell: bash
         run: NativeApp/scripts/emulator-e2e.sh
 
+      - name: Run Native OAuth coordinator against emulator
+        shell: bash
+        run: NativeApp/scripts/oauth-coordinator-emulator.sh
+
   app-tests:
     runs-on: macos-26
     steps:

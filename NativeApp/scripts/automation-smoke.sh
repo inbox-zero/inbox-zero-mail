@@ -20,7 +20,8 @@ run_native automate assert --timeout-ms 30000 \
   'Combined inbox' \
   'Release checklist' \
   'VIP migration timeline' \
-  'Microsoft follow up'
+  'Microsoft follow up' \
+  'role=button name="drafts"'
 run_native automate screenshot mail-canvas
 
 widget_id() {
@@ -30,10 +31,9 @@ widget_id() {
 }
 
 compose_id="$(widget_id button Compose)"
-drafts_id="$(widget_id button drafts)"
 new_window_id="$(widget_id button 'New window')"
 microsoft_message_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=listitem name="Microsoft follow up,.*/\1/p' "${SNAPSHOT_PATH}" | head -1)"
-[[ -n "${compose_id}" && -n "${drafts_id}" && -n "${new_window_id}" && -n "${microsoft_message_id}" ]]
+[[ -n "${compose_id}" && -n "${new_window_id}" && -n "${microsoft_message_id}" ]]
 
 # Pointer routing is usable on every host and proves the dynamic secondary
 # window descriptor and native compose markup are installed. Native SDK 0.5.3
@@ -58,8 +58,6 @@ run_native automate widget-click mail-canvas "${microsoft_message_id}"
 run_native automate assert --timeout-ms 5000 'role=listitem name="Microsoft follow up,.*selected'
 run_native automate widget-click mail-canvas "${new_window_id}"
 run_native automate assert --timeout-ms 5000 'window @w[0-9]+ "Microsoft follow up"'
-run_native automate widget-click mail-canvas "${drafts_id}"
-run_native automate assert --timeout-ms 5000 'Saved drafts' 'saved drafts'
 
 if [[ ! -s "${SCREENSHOT_PATH}" ]]; then
   echo "Automation screenshot was not created: ${SCREENSHOT_PATH}" >&2

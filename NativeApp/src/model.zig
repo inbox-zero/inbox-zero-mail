@@ -112,6 +112,12 @@ pub const Model = struct {
     open_window_count: usize = 0,
     search_requested: bool = false,
     sync_generation: u64 = 0,
+    oauth_busy: bool = false,
+    oauth_key: u64 = 0,
+    disconnect_key: u64 = 0,
+    disconnect_account_id: AccountId = .{},
+    restore_pending: u8 = 0,
+    restore_failed: bool = false,
 
     pub const filters = [_]InboxFilter{ .all, .unread, .starred, .snoozed, .archive, .trash, .drafts };
     pub const view_unbound = .{
@@ -138,6 +144,11 @@ pub const Model = struct {
         "open_windows",
         "open_window_count",
         "sync_generation",
+        "oauth_key",
+        "disconnect_key",
+        "disconnect_account_id",
+        "restore_pending",
+        "restore_failed",
         "selectedUnread",
         "selectedStarred",
         "composeOpen",
@@ -196,6 +207,85 @@ pub const Model = struct {
 
     pub fn composeOpen(model: *const Model) bool {
         return model.composer.isOpen();
+    }
+
+    pub fn canDisconnect(model: *const Model) bool {
+        return !model.oauth_busy and model.selected_account < model.account_count and
+            !model.accounts[model.selected_account].credential_key.isEmpty();
+    }
+
+    pub fn authorizationInProgress(model: *const Model) bool {
+        return model.oauth_busy and model.oauth_key != 0;
+    }
+
+    pub fn beginOAuth(model: *Model) ?u64 {
+        if (model.oauth_busy or model.account_count >= max_accounts) return null;
+        const key = 0x4000_0000_0000_0000 | (model.mutation_counter & 0x0fff_ffff_ffff_ffff);
+        model.mutation_counter += 1;
+        model.oauth_busy = true;
+        model.oauth_key = key;
+        return key;
+    }
+
+    pub fn beginDisconnect(model: *Model) ?struct { key: u64, session_key: []const u8 } {
+        if (!model.canDisconnect()) return null;
+        const key = 0x5000_0000_0000_0000 | (model.mutation_counter & 0x0fff_ffff_ffff_ffff);
+        model.mutation_counter += 1;
+        model.oauth_busy = true;
+        model.disconnect_key = key;
+        model.disconnect_account_id = model.accounts[model.selected_account].id;
+        return .{ .key = key, .session_key = model.accounts[model.selected_account].credential_key.slice() };
+    }
+
+    pub fn finishOAuth(model: *Model) void {
+        model.oauth_busy = false;
+        model.oauth_key = 0;
+    }
+
+    pub fn removeDisconnectedAccount(model: *Model) void {
+        const removed_id = model.disconnect_account_id;
+        defer {
+            model.oauth_busy = false;
+            model.disconnect_key = 0;
+            model.disconnect_account_id = .{};
+        }
+        if (!removed_id.isValid() or model.accountIndexById(removed_id) == null) return;
+        var write: usize = 0;
+        for (model.accounts[0..model.account_count]) |candidate| {
+            if (candidate.id.value == removed_id.value) continue;
+            model.accounts[write] = candidate;
+            write += 1;
+        }
+        for (write..model.account_count) |index| model.accounts[index] = .{};
+        model.account_count = write;
+
+        write = 0;
+        for (model.threads[0..model.thread_count]) |candidate| {
+            if (candidate.account_id.value == removed_id.value) continue;
+            model.threads[write] = candidate;
+            model.threads[write].account_index = model.accountIndexById(candidate.account_id) orelse 0;
+            write += 1;
+        }
+        for (write..model.thread_count) |index| model.threads[index] = .{};
+        model.thread_count = write;
+
+        write = 0;
+        for (model.drafts[0..model.draft_count]) |candidate| {
+            if (candidate.account_id.value == removed_id.value) continue;
+            model.drafts[write] = candidate;
+            model.drafts[write].account_index = model.accountIndexById(candidate.account_id) orelse 0;
+            write += 1;
+        }
+        for (write..model.draft_count) |index| model.drafts[index] = .{};
+        model.draft_count = write;
+        if (model.composer.account_id.value == removed_id.value) {
+            model.composer.close();
+        } else if (model.composer.account_id.isValid()) {
+            model.composer.account_index = model.accountIndexById(model.composer.account_id) orelse 0;
+        }
+        model.selected_account = no_index;
+        model.selected_thread = no_index;
+        model.reconcileSelection();
     }
 
     pub fn composeBusy(model: *const Model) bool {
@@ -422,6 +512,37 @@ pub const Model = struct {
         account.token.set(token);
         account.base_url.set(base_url);
         model.account_count += 1;
+    }
+
+    pub fn addAuthorizedAccount(
+        model: *Model,
+        provider: ProviderKind,
+        provider_account_id: []const u8,
+        email: []const u8,
+        display_name: []const u8,
+        credential_key: []const u8,
+        base_url: []const u8,
+    ) ?usize {
+        for (model.accounts[0..model.account_count], 0..) |*existing, index| {
+            if (existing.provider == provider and std.mem.eql(u8, existing.provider_account_id.slice(), provider_account_id)) {
+                existing.email.set(email);
+                existing.display_name.set(display_name);
+                existing.credential_key.set(credential_key);
+                existing.base_url.set(base_url);
+                return index;
+            }
+        }
+        if (model.account_count >= max_accounts) return null;
+        const index = model.account_count;
+        const candidate = &model.accounts[index];
+        candidate.* = .{ .id = ids.nextAccountId(&model.next_account_id), .provider = provider };
+        candidate.provider_account_id.set(provider_account_id);
+        candidate.email.set(email);
+        candidate.display_name.set(display_name);
+        candidate.credential_key.set(credential_key);
+        candidate.base_url.set(base_url);
+        model.account_count += 1;
+        return index;
     }
 
     pub fn addThread(model: *Model, thread: MailThread) ?usize {
@@ -962,6 +1083,14 @@ pub fn initialModel() Model {
         model.addAccount(seed.provider, seed.email, seed.display_name, seed.bearer_token, seed.base_url);
     }
     model.status_message.set("Connecting to Gmail and Outlook emulators.");
+    return model;
+}
+
+/// The shipping application starts with no implicit identities. Emulator
+/// accounts are available only through the explicit INBOX_ZERO_EMULATE path.
+pub fn emptyModel() Model {
+    var model: Model = .{};
+    model.status_message.set("Connect Gmail or Outlook to get started.");
     return model;
 }
 

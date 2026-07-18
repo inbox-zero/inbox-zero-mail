@@ -43,7 +43,7 @@ pub fn scheduleAutosave(model: *mail.Model, fx: anytype, on_fire: anytype) void 
     });
 }
 
-pub fn save(model: *mail.Model, fx: anytype, on_response: anytype, close_after: bool) void {
+pub fn save(model: *mail.Model, fx: anytype, on_response: anytype, on_authorized_response: anytype, close_after: bool) void {
     if (model.composer.stage != .idle) return;
     if (!model.composer.isOpen() or !model.composer.hasContent()) {
         if (close_after) model.composer.close();
@@ -65,11 +65,11 @@ pub fn save(model: *mail.Model, fx: anytype, on_response: anytype, close_after: 
         return;
     }
     beginOperation(model, if (close_after) .save_and_close else .save, .saving);
-    startUpsert(model, fx, on_response);
+    startUpsert(model, fx, on_response, on_authorized_response);
     if (close_after and model.composer.state != .failed) model.composer.window_open = false;
 }
 
-pub fn send(model: *mail.Model, fx: anytype, on_response: anytype) void {
+pub fn send(model: *mail.Model, fx: anytype, on_response: anytype, on_authorized_response: anytype) void {
     if (model.composer.stage != .idle) return;
     if (!model.composer.canSend()) {
         fail(model, "Add a valid recipient and a subject or message before sending.");
@@ -84,13 +84,13 @@ pub fn send(model: *mail.Model, fx: anytype, on_response: anytype) void {
     beginOperation(model, .send, .sending);
     if (deliver_existing) {
         model.composer.stage = .deliver;
-        issueCurrentStage(model, fx, on_response);
+        issueCurrentStage(model, fx, on_response, on_authorized_response);
     } else {
-        startUpsert(model, fx, on_response);
+        startUpsert(model, fx, on_response, on_authorized_response);
     }
 }
 
-pub fn discard(model: *mail.Model, fx: anytype, on_response: anytype) void {
+pub fn discard(model: *mail.Model, fx: anytype, on_response: anytype, on_authorized_response: anytype) void {
     if (model.composer.stage != .idle) return;
     fx.cancelTimer(autosave_timer_key);
     if (model.composer.provider_draft_id.isEmpty() or model.composer.account_index >= model.account_count) {
@@ -101,14 +101,14 @@ pub fn discard(model: *mail.Model, fx: anytype, on_response: anytype) void {
     }
     beginOperation(model, .discard, .saving);
     model.composer.stage = .delete;
-    issueCurrentStage(model, fx, on_response);
+    issueCurrentStage(model, fx, on_response, on_authorized_response);
     if (model.composer.state != .failed) model.composer.window_open = false;
 }
 
 /// Returns true when the operation reached a terminal state and provider sync
 /// should restart. A fresh generation invalidates any stale draft-list response
 /// that was already in flight when this mutation began.
-pub fn handleResponse(model: *mail.Model, response: native_sdk.EffectResponse, fx: anytype, on_response: anytype) bool {
+pub fn handleResponse(model: *mail.Model, response: native_sdk.EffectResponse, fx: anytype, on_response: anytype, on_authorized_response: anytype) bool {
     if (!model.composer.operation_id.isValid() or response.key != operationKey(model.composer.operation_id.value, model.composer.stage)) return false;
     if (!responseOk(response)) {
         fail(model, "The provider rejected the mail operation. Your draft is still available.");
@@ -122,7 +122,7 @@ pub fn handleResponse(model: *mail.Model, response: native_sdk.EffectResponse, f
             }
             model.composer.operation_generation = model.composer.autosave_generation;
             model.composer.stage = .upsert;
-            issueCurrentStage(model, fx, on_response);
+            issueCurrentStage(model, fx, on_response, on_authorized_response);
             return model.composer.state == .failed;
         },
         .upsert => {
@@ -138,13 +138,13 @@ pub fn handleResponse(model: *mail.Model, response: native_sdk.EffectResponse, f
                 model.composer.operation_id = ids.nextOperationId(&model.next_operation_id);
                 model.composer.operation_generation = model.composer.autosave_generation;
                 model.composer.state = if (model.composer.intent == .send) .sending else .saving;
-                issueCurrentStage(model, fx, on_response);
+                issueCurrentStage(model, fx, on_response, on_authorized_response);
                 return model.composer.state == .failed;
             }
             model.composer.dirty = false;
             if (model.composer.intent == .send) {
                 model.composer.stage = .deliver;
-                issueCurrentStage(model, fx, on_response);
+                issueCurrentStage(model, fx, on_response, on_authorized_response);
                 return model.composer.state == .failed;
             } else {
                 const close_after = model.composer.intent == .save_and_close;
@@ -180,7 +180,7 @@ fn beginOperation(model: *mail.Model, intent: compose.Intent, state: compose.Sta
     model.composer.error_message = .{};
 }
 
-fn startUpsert(model: *mail.Model, fx: anytype, on_response: anytype) void {
+fn startUpsert(model: *mail.Model, fx: anytype, on_response: anytype, on_authorized_response: anytype) void {
     if (model.composer.account_index >= model.account_count) {
         fail(model, "The sending account is no longer available.");
         return;
@@ -193,10 +193,10 @@ fn startUpsert(model: *mail.Model, fx: anytype, on_response: anytype) void {
     } else {
         model.composer.stage = .upsert;
     }
-    issueCurrentStage(model, fx, on_response);
+    issueCurrentStage(model, fx, on_response, on_authorized_response);
 }
 
-fn issueCurrentStage(model: *mail.Model, fx: anytype, on_response: anytype) void {
+fn issueCurrentStage(model: *mail.Model, fx: anytype, on_response: anytype, on_authorized_response: anytype) void {
     const account_index = model.accountIndexById(model.composer.account_id) orelse {
         fail(model, "The sending account is no longer available.");
         return;
@@ -241,7 +241,7 @@ fn issueCurrentStage(model: *mail.Model, fx: anytype, on_response: anytype) void
         return;
     };
     const key = operationKey(model.composer.operation_id.value, model.composer.stage);
-    if (!transport.fetchAuthorized(fx, key, request, account.tokenSlice(), on_response)) {
+    if (!transport.fetchAuthorized(fx, key, request, account.tokenSlice(), account.credential_key.slice(), on_response, on_authorized_response)) {
         fail(model, "Could not queue the provider request.");
     }
 }

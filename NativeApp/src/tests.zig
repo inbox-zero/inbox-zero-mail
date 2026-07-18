@@ -3,6 +3,10 @@ const native_sdk = @import("native_sdk");
 const main = @import("main.zig");
 const mail = @import("model.zig");
 
+test {
+    _ = @import("platform/native_services.zig");
+}
+
 const canvas = native_sdk.canvas;
 const AppMarkup = canvas.MarkupView(main.Model, main.Msg);
 const ComposeMarkup = canvas.MarkupView(main.Model, main.Msg);
@@ -70,6 +74,8 @@ test "keyboard map covers the keyboard-first inbox actions" {
     try std.testing.expectEqual(main.Msg.select_previous, main.onKey(key).?);
     key.key = "e";
     try std.testing.expectEqual(main.Msg.archive_selected, main.onKey(key).?);
+    key.key = "d";
+    try std.testing.expectEqual(main.Msg{ .set_filter = .drafts }, main.onKey(key).?);
     key.key = "u";
     key.modifiers.shift = true;
     try std.testing.expectEqual(main.Msg.toggle_read_selected, main.onKey(key).?);
@@ -484,4 +490,63 @@ test "stale refresh draft cannot overwrite a newer local snapshot" {
     try std.testing.expectEqual(stable_id.value, model.drafts[0].id.value);
     try std.testing.expectEqualStrings("New local revision", model.drafts[0].subject.slice());
     try std.testing.expect(!model.drafts[0].remote);
+}
+
+test "disconnect removes the requested account even if selection changes" {
+    var model = main.initialModel();
+    const removed_id = model.accounts[0].id;
+    const retained_id = model.accounts[1].id;
+    model.accounts[0].credential_key.set("gmail:test-account");
+    model.selectAccount(0);
+    _ = model.beginDisconnect() orelse return error.DisconnectNotStarted;
+    model.beginNewCompose();
+    try std.testing.expectEqual(removed_id.value, model.composer.account_id.value);
+
+    model.selectAccount(1);
+    model.removeDisconnectedAccount();
+
+    try std.testing.expect(model.accountIndexById(removed_id) == null);
+    try std.testing.expect(model.accountIndexById(retained_id) != null);
+    try std.testing.expect(!model.composeOpen());
+    try std.testing.expectEqual(@as(u64, 0), model.disconnect_key);
+    try std.testing.expect(!model.disconnect_account_id.isValid());
+}
+
+test "restore distinguishes empty slots from credential failures" {
+    var model = mail.emptyModel();
+    model.restore_pending = mail.max_accounts;
+    var fx = main.Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    for (0..mail.max_accounts) |index| {
+        const bytes: []const u8 = if (index == 1) "credentials_unavailable" else "session_not_found";
+        main.update(&model, .{ .oauth_restore_response = .{
+            .key = 0x6000_0000_0000_0000 + index,
+            .ok = false,
+            .bytes = bytes,
+        } }, &fx);
+    }
+
+    try std.testing.expect(model.restore_failed);
+    try std.testing.expect(std.mem.indexOf(u8, model.status_message.slice(), "could not be restored") != null);
+}
+
+test "OAuth authorization can be cancelled without leaving the model busy" {
+    var model = mail.emptyModel();
+    var fx = main.Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    model.oauth_busy = true;
+    model.oauth_key = 77;
+
+    main.update(&model, .cancel_oauth, &fx);
+    try std.testing.expectEqual(@as(usize, 1), fx.pendingHostCount());
+    const request = fx.pendingHostAt(0) orelse return error.CancelRequestMissing;
+    try std.testing.expectEqual(@as(u64, 77), request.key);
+    try std.testing.expectEqualStrings("inbox-zero.oauth.cancel.v1", request.name);
+
+    main.update(&model, .{ .oauth_response = .{ .key = 77, .ok = false, .bytes = "Authorization cancelled." } }, &fx);
+    try std.testing.expect(!model.oauth_busy);
+    try std.testing.expectEqualStrings("Authorization cancelled.", model.status_message.slice());
 }

@@ -14,6 +14,13 @@
   <split value="{sidebar_split}" on-resize="sidebar_resized" grow="1">
     <column min-width="180" padding="12" gap="12" background="surface_subtle" label="Mail navigation">
       <text><span weight="bold">Accounts</span></text>
+      <row gap="4">
+        <button size="sm" variant="outline" grow="1" on-press="connect_gmail" disabled="{oauth_busy}">Gmail</button>
+        <button size="sm" variant="outline" grow="1" on-press="connect_outlook" disabled="{oauth_busy}">Outlook</button>
+      </row>
+      <if test="{authorizationInProgress}">
+        <button size="sm" variant="ghost" on-press="cancel_oauth">Cancel authorization</button>
+      </if>
       <scroll grow="1">
         <column gap="4">
           <for each="accountsView" key="index" as="a">
@@ -30,6 +37,9 @@
           </for>
         </column>
       </scroll>
+      <if test="{canDisconnect}">
+        <button size="sm" variant="ghost" on-press="disconnect_selected">Disconnect selected</button>
+      </if>
       <separator />
       <text><span weight="bold">Views</span></text>
       <column gap="3">
@@ -164,5 +174,5 @@
     </split>
   </split>
 
-  <status-bar>{statusMessage} | C compose | R reply | A reply all | F forward | J/K navigate | E archive | S star | Enter new window</status-bar>
+  <status-bar>{statusMessage} | C compose | D drafts | R reply | A reply all | F forward | J/K navigate | E archive | S star | Enter new window</status-bar>
 </column>
