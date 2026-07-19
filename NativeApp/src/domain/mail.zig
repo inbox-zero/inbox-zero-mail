@@ -2,7 +2,7 @@ const account = @import("account.zig");
 const ids = @import("ids.zig");
 const text = @import("text.zig");
 
-pub const InboxFilter = enum { all, unread, starred, snoozed, archive, trash, drafts };
+pub const InboxFilter = enum { all, unread, starred, snoozed, notifications, archive, trash, drafts };
 
 pub const MailThread = struct {
     id: ids.MessageId = .{},
@@ -25,6 +25,8 @@ pub const MailThread = struct {
     snippet: text.Text(512) = .{},
     body: text.Text(8192) = .{},
     received_at: text.Text(64) = .{},
+    category: text.Text(64) = .{},
+    received_at_ms: i64 = 0,
     window_label: text.Text(64) = .{},
     canvas_label: text.Text(64) = .{},
     unread: bool = false,
@@ -33,6 +35,7 @@ pub const MailThread = struct {
     archived: bool = false,
     trashed: bool = false,
     snoozed: bool = false,
+    has_attachments: bool = false,
 
     pub fn subjectSlice(self: *const MailThread) []const u8 {
         return self.subject.slice();

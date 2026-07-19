@@ -13,6 +13,17 @@ pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 const canvas = native_sdk.canvas;
 const geometry = native_sdk.geometry;
 
+const star_icon = canvas.svg_icon.parseComptime(@embedFile("assets/icons/star.svg"));
+const star_filled_icon = canvas.svg_icon.parseComptime(@embedFile("assets/icons/star-filled.svg"));
+const paperclip_icon = canvas.svg_icon.parseComptime(@embedFile("assets/icons/paperclip.svg"));
+const unread_dot_icon = canvas.svg_icon.parseComptime(@embedFile("assets/icons/unread-dot.svg"));
+pub const app_icons = [_]canvas.icons.Entry{
+    .{ .name = "star", .icon = &star_icon },
+    .{ .name = "star-filled", .icon = &star_filled_icon },
+    .{ .name = "paperclip", .icon = &paperclip_icon },
+    .{ .name = "unread-dot", .icon = &unread_dot_icon },
+};
+
 pub const canvas_label = "mail-canvas";
 pub const window_width: f32 = 1280;
 pub const window_height: f32 = 780;
@@ -53,15 +64,35 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .height = window_height,
     .min_width = window_min_width,
     .min_height = window_min_height,
+    .titlebar = .hidden_inset_tall,
     .restore_state = true,
     .views = &shell_views,
 }};
 pub const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
 pub const Msg = union(enum) {
+    toggle_drawer,
+    toggle_search,
+    toggle_command_palette,
+    open_all_inbox_window,
+    open_inbox_window: usize,
+    close_inbox_window: u64,
+    set_inbox_window_filter: mail.WindowFilterAction,
+    open_inbox_window_thread: mail.WindowThreadAction,
+    close_inbox_window_thread: u64,
+    open_inbox_window_thread_window: mail.WindowThreadAction,
+    show_all,
+    show_unread,
+    show_starred,
+    show_snoozed,
+    show_notifications,
+    show_archive,
+    show_trash,
+    show_drafts,
     select_account: usize,
     set_filter: mail.InboxFilter,
     select_thread: usize,
+    activate_thread: usize,
     select_next,
     select_previous,
     search_edit: canvas.TextInputEvent,
@@ -83,6 +114,7 @@ pub const Msg = union(enum) {
     snooze_selected,
     open_selected_window,
     activate_selected,
+    close_reading,
     close_window: usize,
     compose_new,
     compose_reply,
@@ -112,8 +144,27 @@ pub const Msg = union(enum) {
     authorized_outbound_response: native_sdk.EffectHostResult,
 
     pub const view_unbound = .{
+        "open_all_inbox_window",
+        "select_thread",
         "select_next",
         "select_previous",
+        "set_filter",
+        "sidebar_resized",
+        "list_resized",
+        "archive_selected",
+        "trash_selected",
+        "toggle_read_selected",
+        "toggle_star_selected",
+        "snooze_selected",
+        "open_selected_window",
+        "compose_reply",
+        "compose_reply_all",
+        "compose_forward",
+        "close_inbox_window",
+        "set_inbox_window_filter",
+        "open_inbox_window_thread",
+        "close_inbox_window_thread",
+        "open_inbox_window_thread_window",
         "activate_selected",
         "focus_search",
         "close_window",
@@ -164,6 +215,7 @@ fn oauthSettings(init: std.process.Init) native_services.OAuthSettings {
 }
 
 pub fn boot(model: *Model, fx: *Effects) void {
+    model.now_ms = fx.wallMs();
     if (model.account_count > 0) {
         providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
         return;
@@ -184,9 +236,64 @@ pub fn boot(model: *Model, fx: *Effects) void {
 
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
     switch (msg) {
-        .select_account => |index| model.selectAccount(index),
-        .set_filter => |filter| model.selectFilter(filter),
+        .toggle_drawer => {
+            model.drawer_open = !model.drawer_open;
+            if (model.drawer_open) model.command_palette_open = false;
+        },
+        .toggle_search => {
+            model.search_visible = !model.search_visible;
+            model.search_requested = model.search_visible;
+            if (!model.search_visible) {
+                model.search_buffer.clear();
+                model.reconcileSelection();
+            }
+        },
+        .toggle_command_palette => {
+            model.command_palette_open = !model.command_palette_open;
+            if (model.command_palette_open) model.drawer_open = false;
+        },
+        .open_all_inbox_window => model.openInboxWindow(mail.max_accounts),
+        .open_inbox_window => |account_index| {
+            model.openInboxWindow(account_index);
+            model.drawer_open = false;
+        },
+        .close_inbox_window => |id| model.closeInboxWindow(id),
+        .set_inbox_window_filter => |action| model.setInboxWindowFilter(action),
+        .open_inbox_window_thread => |action| model.openInboxWindowThread(action),
+        .close_inbox_window_thread => |window_id| model.closeInboxWindowThread(window_id),
+        .open_inbox_window_thread_window => |action| model.openInboxWindowThreadWindow(action),
+        .show_all => model.selectFilter(.all),
+        .show_unread => model.selectFilter(.unread),
+        .show_starred => model.selectFilter(.starred),
+        .show_snoozed => model.selectFilter(.snoozed),
+        .show_notifications => model.selectFilter(.notifications),
+        .show_archive => {
+            model.selectFilter(.archive);
+            model.drawer_open = false;
+        },
+        .show_trash => {
+            model.selectFilter(.trash);
+            model.drawer_open = false;
+        },
+        .show_drafts => {
+            model.selectFilter(.drafts);
+            model.drawer_open = false;
+        },
+        .select_account => |index| {
+            model.selectAccount(index);
+            model.drawer_open = false;
+        },
+        .set_filter => |filter| {
+            model.selectFilter(filter);
+            model.drawer_open = false;
+        },
         .select_thread => |index| model.selectThread(index),
+        .activate_thread => |index| {
+            model.selectThread(index);
+            model.activateSelected();
+            model.drawer_open = false;
+            model.command_palette_open = false;
+        },
         .select_next => model.selectRelative(1),
         .select_previous => model.selectRelative(-1),
         .search_edit => |edit| {
@@ -194,8 +301,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.search_requested = false;
             model.reconcileSelection();
         },
-        .focus_search => model.search_requested = true,
+        .focus_search => {
+            model.search_visible = true;
+            model.search_requested = true;
+        },
         .refresh => {
+            model.now_ms = fx.wallMs();
             model.status_message.set("Refreshing all accounts.");
             providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
         },
@@ -241,6 +352,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .open_selected_window => model.openSelectedWindow(),
         .activate_selected => model.activateSelected(),
+        .close_reading => model.closeReading(),
         .close_window => |index| model.closeWindow(index),
         .compose_new => if (!model.composeBusy()) model.beginNewCompose(),
         .compose_reply => if (!model.composeBusy()) model.beginMessageCompose(.reply),
@@ -449,6 +561,7 @@ pub fn onKey(keyboard: canvas.WidgetKeyboardEvent) ?Msg {
     if (keyboard.phase != .key_down) return null;
     const key = keyboard.key;
     if (keyboard.modifiers.hasNavigationModifier()) return null;
+    if (std.ascii.eqlIgnoreCase(key, "escape")) return .close_reading;
     if (keyboard.modifiers.shift) {
         if (std.ascii.eqlIgnoreCase(key, "u")) return .toggle_read_selected;
         return null;
@@ -472,12 +585,29 @@ pub fn onKey(keyboard: canvas.WidgetKeyboardEvent) ?Msg {
 pub fn onCommand(name: []const u8) ?Msg {
     if (std.mem.eql(u8, name, "mail.refresh")) return .refresh;
     if (std.mem.eql(u8, name, "mail.open-window")) return .open_selected_window;
+    if (std.mem.eql(u8, name, "mail.new-window")) return .open_all_inbox_window;
+    if (std.mem.eql(u8, name, "mail.command-palette")) return .toggle_command_palette;
     if (std.mem.eql(u8, name, "mail.compose")) return .compose_new;
     return null;
 }
 
 pub fn mailWindows(model: *const Model, scratch: *MailApp.WindowsScratch) []const MailApp.WindowDescriptor {
     var count: usize = 0;
+    for (model.inbox_windows[0..model.inbox_window_count]) |*state| {
+        if (!state.active or count >= scratch.windows.len) continue;
+        scratch.windows[count] = .{
+            .label = state.window_label.slice(),
+            .canvas_label = state.canvas_label.slice(),
+            .title = model.inboxWindowTitle(state),
+            .width = 1180,
+            .height = 760,
+            .min_width = 820,
+            .min_height = 520,
+            .titlebar = .hidden_inset_tall,
+            .on_close = Msg{ .close_inbox_window = state.id },
+        };
+        count += 1;
+    }
     for (model.open_windows[0..model.open_window_count]) |message_id| {
         const thread_index = model.threadIndexById(message_id) orelse continue;
         if (count >= scratch.windows.len) continue;
@@ -512,6 +642,7 @@ pub fn mailWindows(model: *const Model, scratch: *MailApp.WindowsScratch) []cons
 
 pub fn mailWindowView(ui: *MailApp.Ui, model: *const Model, window_label: []const u8) MailApp.Ui.Node {
     if (std.mem.eql(u8, window_label, "compose")) return CompiledComposeView.build(ui, model);
+    if (model.inboxWindowByLabel(window_label)) |state| return inboxWindowView(ui, model, state);
     for (model.threads[0..model.thread_count]) |*thread| {
         if (std.mem.eql(u8, thread.window_label.slice(), window_label)) return detailWindow(ui, model, thread);
     }
@@ -519,6 +650,143 @@ pub fn mailWindowView(ui: *MailApp.Ui, model: *const Model, window_label: []cons
         ui.text(.{ .size = .heading }, "Message unavailable"),
         ui.text(.{ .wrap = true }, "The message backing this window is no longer in the synchronized store."),
     });
+}
+
+fn inboxWindowView(ui: *MailApp.Ui, model: *const Model, state: *const mail.InboxWindowState) MailApp.Ui.Node {
+    if (state.reading) {
+        if (model.threadIndexById(state.selected_thread_id)) |thread_index| {
+            return inboxWindowDetailView(ui, model, state, &model.threads[thread_index]);
+        }
+    }
+    const title = model.inboxWindowTitle(state);
+    const threads = model.inboxWindowThreads(state, ui.arena);
+    const rows = ui.arena.alloc(MailApp.Ui.Node, threads.len) catch return ui.column(.{ .grow = 1, .main = .center, .cross = .center }, .{
+        ui.text(.{}, "The inbox window could not be rendered."),
+    });
+    for (threads, 0..) |thread, index| rows[index] = inboxWindowThreadRow(ui, state, thread);
+
+    const all_count = model.inboxWindowCount(state, .all);
+    const unread_count = model.inboxWindowCount(state, .unread);
+    const starred_count = model.inboxWindowCount(state, .starred);
+    const snoozed_count = model.inboxWindowCount(state, .snoozed);
+    const tabs = ui.el(.tabs, .{ .gap = 6, .grow = 1 }, .{
+        textLeaf(ui, .segmented_control, .{
+            .size = .sm,
+            .variant = .ghost,
+            .selected = state.filter == .all,
+            .on_press = Msg{ .set_inbox_window_filter = .{ .window_id = state.id, .filter = .all } },
+        }, ui.fmt("All  {d}", .{all_count})),
+        textLeaf(ui, .segmented_control, .{
+            .size = .sm,
+            .variant = .ghost,
+            .selected = state.filter == .unread,
+            .on_press = Msg{ .set_inbox_window_filter = .{ .window_id = state.id, .filter = .unread } },
+        }, ui.fmt("Unread  {d}", .{unread_count})),
+        textLeaf(ui, .segmented_control, .{
+            .size = .sm,
+            .variant = .ghost,
+            .selected = state.filter == .starred,
+            .on_press = Msg{ .set_inbox_window_filter = .{ .window_id = state.id, .filter = .starred } },
+        }, ui.fmt("Starred  {d}", .{starred_count})),
+        textLeaf(ui, .segmented_control, .{
+            .size = .sm,
+            .variant = .ghost,
+            .selected = state.filter == .snoozed,
+            .on_press = Msg{ .set_inbox_window_filter = .{ .window_id = state.id, .filter = .snoozed } },
+        }, ui.fmt("Snoozed  {d}", .{snoozed_count})),
+    });
+
+    const list = if (rows.len > 0)
+        ui.column(.{ .padding = 16, .gap = 0 }, rows)
+    else
+        ui.column(.{ .grow = 1, .main = .center, .cross = .center, .gap = 8, .padding = 48 }, .{
+            ui.icon(.{ .width = 28, .height = 28, .semantics = .{ .label = "Empty inbox" } }, "file-text"),
+            ui.text(.{}, "No messages match this view."),
+        });
+
+    return ui.column(.{ .grow = 1, .style_tokens = .{ .background = .background } }, .{
+        ui.row(.{ .height = 60, .padding = 12, .gap = 8, .cross = .center, .window_drag = true, .style_tokens = .{ .background = .surface }, .semantics = .{ .label = "Inbox toolbar" } }, .{
+            ui.text(.{ .width = 180, .overflow = .ellipsis }, title),
+            tabs,
+            ui.button(.{ .size = .sm, .variant = .ghost, .icon = "refresh-cw", .on_press = .refresh, .semantics = .{ .label = "Refresh" } }, ""),
+            ui.button(.{ .size = .sm, .variant = .ghost, .icon = "edit", .on_press = .compose_new, .semantics = .{ .label = "Compose" } }, ""),
+        }),
+        ui.scroll(.{ .grow = 1, .semantics = .{ .label = title } }, .{list}),
+    });
+}
+
+fn inboxWindowDetailView(ui: *MailApp.Ui, model: *const Model, state: *const mail.InboxWindowState, thread: *const mail.MailThread) MailApp.Ui.Node {
+    const account = if (thread.account_index < model.account_count) model.accounts[thread.account_index].emailSlice() else "Unknown account";
+    const action = mail.WindowThreadAction{ .window_id = state.id, .thread_id = thread.id.value };
+    return ui.column(.{ .grow = 1, .style_tokens = .{ .background = .background } }, .{
+        ui.row(.{ .height = 60, .padding = 12, .gap = 8, .cross = .center, .window_drag = true, .style_tokens = .{ .background = .surface }, .semantics = .{ .label = "Message toolbar" } }, .{
+            ui.button(.{ .size = .sm, .variant = .ghost, .icon = "chevron-left", .on_press = Msg{ .close_inbox_window_thread = state.id }, .semantics = .{ .label = "Back to inbox" } }, ""),
+            ui.text(.{ .grow = 1, .overflow = .ellipsis }, thread.subjectSlice()),
+            ui.button(.{ .size = .sm, .variant = .ghost, .icon = "external-link", .on_press = Msg{ .open_inbox_window_thread_window = action }, .semantics = .{ .label = "Open in new window" } }, ""),
+        }),
+        ui.separator(.{}),
+        ui.scroll(.{ .grow = 1, .semantics = .{ .label = "Message" } }, .{
+            ui.row(.{ .padding = 32, .main = .center }, .{
+                ui.column(.{ .width = 860, .gap = 20 }, .{
+                    ui.text(.{ .size = .heading, .wrap = true }, thread.subjectSlice()),
+                    ui.column(.{ .gap = 4 }, .{
+                        ui.text(.{}, thread.senderSlice()),
+                        ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, account),
+                    }),
+                    ui.separator(.{}),
+                    ui.text(.{ .wrap = true }, if (!thread.body.isEmpty()) thread.bodySlice() else thread.snippetSlice()),
+                }),
+            }),
+        }),
+        ui.el(.status_bar, .{ .text = ui.fmt("{s} | {s}", .{ account, if (thread.provider == .gmail) "Gmail" else "Outlook" }) }, .{}),
+    });
+}
+
+fn inboxWindowThreadRow(ui: *MailApp.Ui, state: *const mail.InboxWindowState, thread: mail.ThreadView) MailApp.Ui.Node {
+    const category = if (thread.has_category)
+        badgeLeaf(ui, .{ .variant = .secondary }, thread.category)
+    else
+        ui.el(.stack, .{}, .{});
+    return ui.el(.list_item, .{
+        .height = 48,
+        .padding = 4,
+        .gap = 10,
+        .cross = .center,
+        .selected = thread.selected,
+        .autofocus = thread.selected,
+        .on_press = Msg{ .open_inbox_window_thread = .{ .window_id = state.id, .thread_id = thread.id } },
+        .on_submit = Msg{ .open_inbox_window_thread = .{ .window_id = state.id, .thread_id = thread.id } },
+        .semantics = .{ .label = thread.accessible },
+    }, .{
+        if (thread.unread)
+            ui.appIcon(.{ .width = 8, .height = 8, .style_tokens = .{ .foreground = .info }, .semantics = .{ .label = "Unread" } }, "app:unread-dot")
+        else
+            ui.el(.stack, .{ .width = 8 }, .{}),
+        if (thread.starred)
+            ui.appIcon(.{ .width = 16, .height = 16, .style_tokens = .{ .foreground = .warning }, .semantics = .{ .label = "Starred" } }, "app:star-filled")
+        else
+            ui.appIcon(.{ .width = 16, .height = 16, .style_tokens = .{ .foreground = .text_muted }, .semantics = .{ .label = "Not starred" } }, "app:star"),
+        ui.text(.{ .width = 170, .overflow = .ellipsis }, thread.sender),
+        ui.row(.{ .width = 104, .cross = .center }, .{category}),
+        ui.text(.{ .width = 270, .overflow = .ellipsis }, thread.subject),
+        ui.text(.{ .style_tokens = .{ .foreground = .text_muted } }, "—"),
+        ui.text(.{ .grow = 1, .overflow = .ellipsis, .style_tokens = .{ .foreground = .text_muted } }, thread.snippet),
+        if (thread.has_attachments)
+            ui.appIcon(.{ .width = 16, .height = 16, .style_tokens = .{ .foreground = .text_muted }, .semantics = .{ .label = "Has attachment" } }, "app:paperclip")
+        else
+            ui.el(.stack, .{ .width = 16 }, .{}),
+        ui.text(.{ .width = 44, .text_alignment = .end, .style_tokens = .{ .foreground = .text_muted } }, thread.received),
+    });
+}
+
+fn textLeaf(ui: *MailApp.Ui, kind: canvas.WidgetKind, options: MailApp.Ui.ElementOptions, content: []const u8) MailApp.Ui.Node {
+    var node = ui.el(kind, options, .{});
+    node.widget.text = content;
+    return node;
+}
+
+fn badgeLeaf(ui: *MailApp.Ui, options: MailApp.Ui.ElementOptions, content: []const u8) MailApp.Ui.Node {
+    return textLeaf(ui, .badge, options, content);
 }
 
 fn detailWindow(ui: *MailApp.Ui, model: *const Model, thread: *const mail.MailThread) MailApp.Ui.Node {
@@ -539,10 +807,15 @@ fn detailWindow(ui: *MailApp.Ui, model: *const Model, thread: *const mail.MailTh
 }
 
 pub fn main(init: std.process.Init) !void {
+    canvas.icons.registerAppIcons(&app_icons);
     const app_state = try MailApp.create(std.heap.page_allocator, .{
         .name = "inbox-zero-mail-native",
         .scene = shell_scene,
         .canvas_label = canvas_label,
+        .tokens = canvas.DesignTokens.themeWithOverrides(
+            .{ .color_scheme = .light, .pack = .geist },
+            .{ .stroke = .{ .focus = 1, .focus_offset = 0 } },
+        ),
         .update_fx = update,
         .init_fx = boot,
         .on_key = onKey,

@@ -92,6 +92,7 @@ const OutlookMessage = struct {
     bccRecipients: ?[]const OutlookRecipient = null,
     replyTo: ?[]const OutlookRecipient = null,
     hasAttachments: ?bool = null,
+    categories: ?[]const []const u8 = null,
     parentFolderId: ?[]const u8 = null,
     receivedDateTime: ?[]const u8 = null,
     isRead: ?bool = null,
@@ -462,6 +463,9 @@ pub fn parseGmailThread(model: *mail.Model, account_index: usize, body: []const 
     thread.references.set(headerValue(&message.payload, "References") orelse "");
     thread.snippet.set(message.snippet orelse parsed.value.snippet orelse "");
     thread.received_at.set(message.internalDate orelse "");
+    thread.received_at_ms = parseGmailTimestamp(message.internalDate orelse "");
+    thread.category.set(gmailCategory(message.labelIds));
+    thread.has_attachments = gmailPayloadHasAttachment(&message.payload);
     thread.subject.set(headerValue(&message.payload, "Subject") orelse "(No subject)");
     thread.sender.set(headerValue(&message.payload, "From") orelse model.accounts[account_index].emailSlice());
     thread.sender_email.set(mail.extractAddress(thread.senderSlice()));
@@ -503,6 +507,11 @@ pub fn parseOutlookMessages(model: *mail.Model, account_index: usize, folder: Ou
         setOutlookRecipients(&thread.cc_recipients, message.ccRecipients orelse &.{});
         thread.snippet.set(message.bodyPreview orelse "");
         thread.received_at.set(message.receivedDateTime orelse "");
+        thread.received_at_ms = parseIso8601Timestamp(message.receivedDateTime orelse "");
+        thread.has_attachments = message.hasAttachments orelse false;
+        if (message.categories) |categories| {
+            if (categories.len > 0) thread.category.set(categories[0]);
+        }
         thread.unread = !(message.isRead orelse false);
         thread.starred = if (message.flag) |flag| std.mem.eql(u8, flag.flagStatus orelse "", "flagged") else false;
         thread.in_inbox = folder == .inbox;
@@ -520,6 +529,68 @@ pub fn parseOutlookMessages(model: *mail.Model, account_index: usize, folder: Ou
         if (thread.body.isEmpty()) thread.body.set(thread.snippetSlice());
         _ = model.addThread(thread);
     }
+}
+
+fn gmailCategory(labels: ?[]const []const u8) []const u8 {
+    const values = labels orelse return "";
+    for (values) |label| {
+        if (std.mem.eql(u8, label, "Label_customers")) return "Customers";
+        if (std.mem.eql(u8, label, "Label_ops")) return "Ops/Review";
+        if (std.mem.eql(u8, label, "Label_marketing")) return "Marketing";
+        if (std.mem.eql(u8, label, "Label_newsletters")) return "Newsletter";
+        if (std.mem.eql(u8, label, "Label_receipts")) return "Receipts";
+        if (std.mem.eql(u8, label, "Label_travel")) return "Travel";
+    }
+    return "";
+}
+
+fn gmailPayloadHasAttachment(payload: *const GmailPayload) bool {
+    if (payload.filename) |filename| {
+        if (filename.len > 0) return true;
+    }
+    if (payload.parts) |parts| {
+        for (parts) |*part| if (gmailPayloadHasAttachment(part)) return true;
+    }
+    return false;
+}
+
+fn parseGmailTimestamp(value: []const u8) i64 {
+    return std.fmt.parseInt(i64, value, 10) catch 0;
+}
+
+fn parseIso8601Timestamp(value: []const u8) i64 {
+    if (value.len < 19 or value[4] != '-' or value[7] != '-' or value[10] != 'T' or value[13] != ':' or value[16] != ':') return 0;
+    const year = std.fmt.parseInt(i64, value[0..4], 10) catch return 0;
+    const month = std.fmt.parseInt(i64, value[5..7], 10) catch return 0;
+    const day = std.fmt.parseInt(i64, value[8..10], 10) catch return 0;
+    const hour = std.fmt.parseInt(i64, value[11..13], 10) catch return 0;
+    const minute = std.fmt.parseInt(i64, value[14..16], 10) catch return 0;
+    const second = std.fmt.parseInt(i64, value[17..19], 10) catch return 0;
+    const days = daysFromCivil(year, month, day);
+    var milliseconds = (days * 86_400 + hour * 3_600 + minute * 60 + second) * 1_000;
+    if (value.len > 20 and value[19] == '.') {
+        var fraction: i64 = 0;
+        var digits: usize = 0;
+        var index: usize = 20;
+        while (index < value.len and digits < 3 and std.ascii.isDigit(value[index])) : (index += 1) {
+            fraction = fraction * 10 + (value[index] - '0');
+            digits += 1;
+        }
+        while (digits < 3) : (digits += 1) fraction *= 10;
+        milliseconds += fraction;
+    }
+    return milliseconds;
+}
+
+fn daysFromCivil(year_value: i64, month_value: i64, day: i64) i64 {
+    var year = year_value;
+    if (month_value <= 2) year -= 1;
+    const era = @divFloor(year, 400);
+    const year_of_era = year - era * 400;
+    const adjusted_month = month_value + (if (month_value > 2) @as(i64, -3) else 9);
+    const day_of_year = @divFloor(153 * adjusted_month + 2, 5) + day - 1;
+    const day_of_era = year_of_era * 365 + @divFloor(year_of_era, 4) - @divFloor(year_of_era, 100) + day_of_year;
+    return era * 146_097 + day_of_era - 719_468;
 }
 
 pub fn parseOutlookDrafts(model: *mail.Model, account_index: usize, body: []const u8) !void {

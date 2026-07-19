@@ -5,6 +5,7 @@ const emulator_config = @import("config/emulator.zig");
 const account_domain = @import("domain/account.zig");
 const draft_domain = @import("domain/draft.zig");
 const ids = @import("domain/ids.zig");
+const inbox_window_domain = @import("domain/inbox_window.zig");
 const mail_domain = @import("domain/mail.zig");
 const text_domain = @import("domain/text.zig");
 
@@ -30,6 +31,10 @@ pub const Account = account_domain.Account;
 pub const MailThread = mail_domain.MailThread;
 pub const Draft = draft_domain.Draft;
 pub const ComposeMode = draft_domain.ComposeMode;
+pub const InboxWindowState = inbox_window_domain.InboxWindowState;
+pub const WindowThreadAction = inbox_window_domain.ThreadAction;
+pub const WindowFilterAction = inbox_window_domain.FilterAction;
+pub const max_inbox_windows = inbox_window_domain.max_inbox_windows;
 
 pub const AccountView = struct {
     index: usize,
@@ -42,15 +47,20 @@ pub const AccountView = struct {
 };
 
 pub const ThreadView = struct {
+    id: u64,
     index: usize,
     subject: []const u8,
     sender: []const u8,
     snippet: []const u8,
+    category: []const u8,
+    received: []const u8,
     account: []const u8,
     accessible: []const u8,
     selected: bool,
     unread: bool,
     starred: bool,
+    has_category: bool,
+    has_attachments: bool,
 };
 
 pub const DraftView = struct {
@@ -87,16 +97,22 @@ pub const MutationSnapshot = struct {
 };
 
 pub const Model = struct {
+    // Shared mail store. Provider refreshes and mutations update these arrays
+    // once; every declared window rebuilds from the same Model instance.
     accounts: [max_accounts]Account = [_]Account{.{}} ** max_accounts,
     account_count: usize = 0,
     threads: [max_threads]MailThread = [_]MailThread{.{}} ** max_threads,
     thread_count: usize = 0,
     drafts: [max_drafts]Draft = [_]Draft{.{}} ** max_drafts,
     draft_count: usize = 0,
+
+    // Primary-window presentation and composer state. None of these fields is
+    // copied into a secondary inbox window.
     selected_draft: usize = no_index,
     composer: compose_app.Composer = .{},
     selected_account: usize = no_index,
     selected_thread: usize = no_index,
+    reading_open: bool = false,
     filter: InboxFilter = .all,
     search_buffer: canvas.TextBuffer(160) = .{},
     sidebar_split: f32 = 0.20,
@@ -111,6 +127,9 @@ pub const Model = struct {
     open_windows: [3]MessageId = [_]MessageId{.{}} ** 3,
     open_window_count: usize = 0,
     search_requested: bool = false,
+    search_visible: bool = false,
+    drawer_open: bool = false,
+    now_ms: i64 = 0,
     sync_generation: u64 = 0,
     oauth_busy: bool = false,
     oauth_key: u64 = 0,
@@ -118,6 +137,14 @@ pub const Model = struct {
     disconnect_account_id: AccountId = .{},
     restore_pending: u8 = 0,
     restore_failed: bool = false,
+
+    // Secondary windows own only scope/filter/selection state. They retain
+    // stable domain IDs instead of array indexes so refreshes cannot silently
+    // retarget a window when shared mail is reconciled.
+    inbox_windows: [max_inbox_windows]InboxWindowState = [_]InboxWindowState{.{}} ** max_inbox_windows,
+    inbox_window_count: usize = 0,
+    next_inbox_window_id: u64 = 1,
+    command_palette_open: bool = false,
 
     pub const filters = [_]InboxFilter{ .all, .unread, .starred, .snoozed, .archive, .trash, .drafts };
     pub const view_unbound = .{
@@ -133,7 +160,11 @@ pub const Model = struct {
         "composer",
         "selected_account",
         "selected_thread",
+        "filter",
+        "sidebar_split",
+        "list_split",
         "search_buffer",
+        "now_ms",
         "status_message",
         "next_account_id",
         "next_message_id",
@@ -149,8 +180,23 @@ pub const Model = struct {
         "disconnect_account_id",
         "restore_pending",
         "restore_failed",
+        "inbox_windows",
+        "inbox_window_count",
+        "next_inbox_window_id",
         "selectedUnread",
         "selectedStarred",
+        "hasSelection",
+        "selectedSubject",
+        "selectedSender",
+        "selectedBody",
+        "selectedAccountLabel",
+        "selectedStarLabel",
+        "selectedReadLabel",
+        "loadingLabel",
+        "scopeTitle",
+        "visibleThreadCount",
+        "visibleDraftCount",
+        "filters",
         "composeOpen",
     };
 
@@ -203,6 +249,34 @@ pub const Model = struct {
 
     pub fn isDraftsView(model: *const Model) bool {
         return model.filter == .drafts;
+    }
+
+    pub fn isAllView(model: *const Model) bool {
+        return model.filter == .all;
+    }
+
+    pub fn isUnreadView(model: *const Model) bool {
+        return model.filter == .unread;
+    }
+
+    pub fn isStarredView(model: *const Model) bool {
+        return model.filter == .starred;
+    }
+
+    pub fn isSnoozedView(model: *const Model) bool {
+        return model.filter == .snoozed;
+    }
+
+    pub fn isNotificationsView(model: *const Model) bool {
+        return model.filter == .notifications;
+    }
+
+    pub fn isArchiveView(model: *const Model) bool {
+        return model.filter == .archive;
+    }
+
+    pub fn isTrashView(model: *const Model) bool {
+        return model.filter == .trash;
     }
 
     pub fn composeOpen(model: *const Model) bool {
@@ -258,6 +332,15 @@ pub const Model = struct {
         }
         for (write..model.account_count) |index| model.accounts[index] = .{};
         model.account_count = write;
+
+        var window_index: usize = 0;
+        while (window_index < model.inbox_window_count) {
+            if (model.inbox_windows[window_index].account_id.value == removed_id.value) {
+                model.closeInboxWindow(model.inbox_windows[window_index].id);
+            } else {
+                window_index += 1;
+            }
+        }
 
         write = 0;
         for (model.threads[0..model.thread_count]) |candidate| {
@@ -444,16 +527,22 @@ pub const Model = struct {
             const accessible = std.fmt.allocPrint(arena, "{s}, from {s}, account {s}", .{
                 thread.subjectSlice(), thread.senderSlice(), account_name,
             }) catch thread.subjectSlice();
+            const sender = friendlySender(arena, thread.senderSlice());
             out[count] = .{
+                .id = thread.id.value,
                 .index = index,
                 .subject = thread.subjectSlice(),
-                .sender = thread.senderSlice(),
+                .sender = sender,
                 .snippet = thread.snippetSlice(),
+                .category = thread.category.slice(),
+                .received = relativeTime(arena, model.now_ms, thread.received_at_ms),
                 .account = account_name,
                 .accessible = accessible,
                 .selected = model.selected_thread == index,
                 .unread = thread.unread,
                 .starred = thread.starred,
+                .has_category = !thread.category.isEmpty(),
+                .has_attachments = thread.has_attachments,
             };
             count += 1;
         }
@@ -501,6 +590,133 @@ pub const Model = struct {
 
     pub fn unreadCount(model: *const Model) usize {
         return model.unreadCountForAccount(model.selected_account);
+    }
+
+    pub fn allCount(model: *const Model) usize {
+        return model.countForFilter(.all);
+    }
+
+    pub fn starredCount(model: *const Model) usize {
+        return model.countForFilter(.starred);
+    }
+
+    pub fn snoozedCount(model: *const Model) usize {
+        return model.countForFilter(.snoozed);
+    }
+
+    pub fn notificationCount(_: *const Model) usize {
+        return 0;
+    }
+
+    pub fn openInboxWindow(model: *Model, account_index: usize) void {
+        if (model.inbox_window_count >= max_inbox_windows) {
+            model.status_message.set("Close an inbox window before opening another one.");
+            return;
+        }
+        if (account_index != max_accounts and account_index >= model.account_count) return;
+        const state = &model.inbox_windows[model.inbox_window_count];
+        const id = model.next_inbox_window_id;
+        model.next_inbox_window_id += 1;
+        state.* = .{
+            .id = id,
+            .active = true,
+            .account_id = if (account_index == max_accounts) .{} else model.accounts[account_index].id,
+        };
+        state.title.set(if (account_index == max_accounts) "All Inboxes" else model.accounts[account_index].displayName());
+        var label_buffer: [64]u8 = undefined;
+        state.window_label.set(std.fmt.bufPrint(&label_buffer, "inbox-window-{d}", .{id}) catch "inbox-window");
+        state.canvas_label.set(std.fmt.bufPrint(&label_buffer, "inbox-canvas-{d}", .{id}) catch "inbox-canvas");
+        model.inbox_window_count += 1;
+        model.command_palette_open = false;
+    }
+
+    pub fn closeInboxWindow(model: *Model, id: u64) void {
+        const index = model.inboxWindowIndexById(id) orelse return;
+        for (index + 1..model.inbox_window_count) |read| model.inbox_windows[read - 1] = model.inbox_windows[read];
+        model.inbox_window_count -= 1;
+        model.inbox_windows[model.inbox_window_count] = .{};
+    }
+
+    pub fn inboxWindowByLabel(model: *const Model, label: []const u8) ?*const InboxWindowState {
+        for (model.inbox_windows[0..model.inbox_window_count]) |*state| {
+            if (std.mem.eql(u8, state.window_label.slice(), label)) return state;
+        }
+        return null;
+    }
+
+    pub fn inboxWindowTitle(model: *const Model, state: *const InboxWindowState) []const u8 {
+        if (!state.title.isEmpty()) return state.title.slice();
+        if (state.isAllInboxes()) return "All Inboxes";
+        const index = model.accountIndexById(state.account_id) orelse return "Mailbox";
+        return model.accounts[index].displayName();
+    }
+
+    pub fn inboxWindowThreads(model: *const Model, state: *const InboxWindowState, arena: std.mem.Allocator) []const ThreadView {
+        const out = arena.alloc(ThreadView, model.thread_count) catch return &.{};
+        var count: usize = 0;
+        for (model.threads[0..model.thread_count], 0..) |*thread, index| {
+            if (!model.threadMatchesWindow(thread, state)) continue;
+            const account_name = if (thread.account_index < model.account_count)
+                model.accounts[thread.account_index].emailSlice()
+            else
+                "Unknown account";
+            const accessible = std.fmt.allocPrint(arena, "{s}, from {s}, account {s}", .{
+                thread.subjectSlice(), thread.senderSlice(), account_name,
+            }) catch thread.subjectSlice();
+            out[count] = .{
+                .id = thread.id.value,
+                .index = index,
+                .subject = thread.subjectSlice(),
+                .sender = friendlySender(arena, thread.senderSlice()),
+                .snippet = thread.snippetSlice(),
+                .category = thread.category.slice(),
+                .received = relativeTime(arena, model.now_ms, thread.received_at_ms),
+                .account = account_name,
+                .accessible = accessible,
+                .selected = state.selected_thread_id.value == thread.id.value,
+                .unread = thread.unread,
+                .starred = thread.starred,
+                .has_category = !thread.category.isEmpty(),
+                .has_attachments = thread.has_attachments,
+            };
+            count += 1;
+        }
+        return out[0..count];
+    }
+
+    pub fn inboxWindowCount(model: *const Model, state: *const InboxWindowState, filter: InboxFilter) usize {
+        var count: usize = 0;
+        for (model.threads[0..model.thread_count]) |*thread| {
+            var scoped = state.*;
+            scoped.filter = filter;
+            count += @intFromBool(model.threadMatchesWindow(thread, &scoped));
+        }
+        return count;
+    }
+
+    pub fn setInboxWindowFilter(model: *Model, action: WindowFilterAction) void {
+        const index = model.inboxWindowIndexById(action.window_id) orelse return;
+        model.inbox_windows[index].filter = action.filter;
+        model.inbox_windows[index].selected_thread_id = .{};
+        model.inbox_windows[index].reading = false;
+    }
+
+    pub fn openInboxWindowThread(model: *Model, action: WindowThreadAction) void {
+        const window_index = model.inboxWindowIndexById(action.window_id) orelse return;
+        const thread_id = MessageId{ .value = action.thread_id };
+        _ = model.threadIndexById(thread_id) orelse return;
+        model.inbox_windows[window_index].selected_thread_id = thread_id;
+        model.inbox_windows[window_index].reading = true;
+    }
+
+    pub fn closeInboxWindowThread(model: *Model, window_id: u64) void {
+        const window_index = model.inboxWindowIndexById(window_id) orelse return;
+        model.inbox_windows[window_index].reading = false;
+    }
+
+    pub fn openInboxWindowThreadWindow(model: *Model, action: WindowThreadAction) void {
+        if (model.inboxWindowIndexById(action.window_id) == null) return;
+        model.openMessageWindow(.{ .value = action.thread_id });
     }
 
     pub fn addAccount(model: *Model, provider: ProviderKind, email: []const u8, display_name: []const u8, token: []const u8, base_url: []const u8) void {
@@ -773,11 +989,13 @@ pub const Model = struct {
 
     pub fn selectAccount(model: *Model, index: usize) void {
         model.selected_account = if (index < model.account_count) index else no_index;
+        model.reading_open = false;
         model.reconcileSelection();
     }
 
     pub fn selectFilter(model: *Model, filter: InboxFilter) void {
         model.filter = filter;
+        model.reading_open = false;
         if (filter == .drafts) {
             if (model.selected_draft >= model.draft_count and model.draft_count > 0) model.selected_draft = 0;
         }
@@ -828,12 +1046,20 @@ pub const Model = struct {
             if (!model.composeBusy() and model.selected_draft < model.draft_count) model.openDraft(model.selected_draft);
             return;
         }
-        model.openSelectedWindow();
+        model.reading_open = model.hasSelection();
+    }
+
+    pub fn closeReading(model: *Model) void {
+        model.reading_open = false;
     }
 
     pub fn openSelectedWindow(model: *Model) void {
         if (!model.hasSelection()) return;
-        const message_id = model.threads[model.selected_thread].id;
+        model.openMessageWindow(model.threads[model.selected_thread].id);
+    }
+
+    pub fn openMessageWindow(model: *Model, message_id: MessageId) void {
+        if (model.threadIndexById(message_id) == null) return;
         for (model.open_windows[0..model.open_window_count]) |open_id| {
             if (open_id.value == message_id.value) return;
         }
@@ -875,6 +1101,7 @@ pub const Model = struct {
         if (model.sync_generation == 0) model.sync_generation = 1;
         model.thread_count = 0;
         model.selected_thread = no_index;
+        model.reading_open = false;
         model.open_windows = [_]MessageId{.{}} ** 3;
         model.open_window_count = 0;
         model.pending_mutations = [_]MutationSnapshot{.{}} ** 16;
@@ -939,6 +1166,7 @@ pub const Model = struct {
     pub fn reconcileSelection(model: *Model) void {
         if (model.isDraftsView()) {
             model.selected_thread = no_index;
+            model.reading_open = false;
             model.reconcileDraftSelection();
             return;
         }
@@ -950,6 +1178,7 @@ pub const Model = struct {
                 break;
             }
         }
+        if (model.selected_thread == no_index) model.reading_open = false;
     }
 
     fn selectRelativeDraft(model: *Model, delta: isize) void {
@@ -995,6 +1224,46 @@ pub const Model = struct {
         return count;
     }
 
+    fn inboxWindowIndexById(model: *const Model, id: u64) ?usize {
+        for (model.inbox_windows[0..model.inbox_window_count], 0..) |state, index| {
+            if (state.id == id) return index;
+        }
+        return null;
+    }
+
+    fn threadMatchesWindow(_: *const Model, thread: *const MailThread, state: *const InboxWindowState) bool {
+        if (state.account_id.isValid() and thread.account_id.value != state.account_id.value) return false;
+        return switch (state.filter) {
+            .all => thread.in_inbox and !thread.trashed and !thread.snoozed,
+            .unread => thread.in_inbox and thread.unread and !thread.trashed and !thread.snoozed,
+            .starred => thread.starred and !thread.trashed,
+            .snoozed => thread.snoozed and !thread.trashed,
+            .notifications => false,
+            .archive => thread.archived and !thread.trashed,
+            .trash => thread.trashed,
+            .drafts => false,
+        };
+    }
+
+    fn countForFilter(model: *const Model, filter: InboxFilter) usize {
+        var count: usize = 0;
+        for (model.threads[0..model.thread_count]) |thread| {
+            if (model.selected_account != no_index and thread.account_index != model.selected_account) continue;
+            const matches = switch (filter) {
+                .all => thread.in_inbox and !thread.trashed and !thread.snoozed,
+                .unread => thread.in_inbox and thread.unread and !thread.trashed and !thread.snoozed,
+                .starred => thread.starred and !thread.trashed,
+                .snoozed => thread.snoozed and !thread.trashed,
+                .notifications => false,
+                .archive => thread.archived and !thread.trashed,
+                .trash => thread.trashed,
+                .drafts => false,
+            };
+            count += @intFromBool(matches);
+        }
+        return count;
+    }
+
     fn threadMatches(model: *const Model, index: usize) bool {
         if (index >= model.thread_count) return false;
         const thread = &model.threads[index];
@@ -1004,6 +1273,7 @@ pub const Model = struct {
             .unread => thread.in_inbox and thread.unread and !thread.trashed and !thread.snoozed,
             .starred => thread.starred and !thread.trashed,
             .snoozed => thread.snoozed and !thread.trashed,
+            .notifications => false,
             .archive => thread.archived and !thread.trashed,
             .trash => thread.trashed,
             .drafts => false,
@@ -1029,6 +1299,44 @@ pub const Model = struct {
             (draft.account_index < model.account_count and containsAsciiIgnoreCase(model.accounts[draft.account_index].emailSlice(), query));
     }
 };
+
+fn friendlySender(arena: std.mem.Allocator, raw: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n\"");
+    if (std.mem.indexOfScalar(u8, trimmed, '<')) |angle| {
+        const name = std.mem.trim(u8, trimmed[0..angle], " \t\r\n\"");
+        if (name.len > 0) return name;
+    }
+    const at = std.mem.indexOfScalar(u8, trimmed, '@') orelse return trimmed;
+    const local = trimmed[0..at];
+    const domain = trimmed[at + 1 ..];
+    if (std.mem.eql(u8, local, "vip.customer")) return "VIP Customer";
+    if (std.mem.eql(u8, local, "newsletter")) return "Leadership Weekly";
+    if (std.mem.eql(u8, local, "billing") and std.mem.startsWith(u8, domain, "figma.")) return "Figma";
+    const output = arena.alloc(u8, local.len) catch return local;
+    var capitalize = true;
+    for (local, 0..) |character, index| {
+        if (character == '.' or character == '_' or character == '-') {
+            output[index] = ' ';
+            capitalize = true;
+        } else {
+            output[index] = if (capitalize) std.ascii.toUpper(character) else character;
+            capitalize = false;
+        }
+    }
+    return output;
+}
+
+fn relativeTime(arena: std.mem.Allocator, now_ms: i64, received_at_ms: i64) []const u8 {
+    if (now_ms <= 0 or received_at_ms <= 0) return "";
+    const elapsed_ms = @max(@as(i64, 0), now_ms - received_at_ms);
+    const minutes = @divFloor(elapsed_ms, 60_000);
+    if (minutes < 1) return "now";
+    if (minutes < 60) return std.fmt.allocPrint(arena, "{d}m", .{minutes}) catch "";
+    const hours = @divFloor(minutes, 60);
+    if (hours < 24) return std.fmt.allocPrint(arena, "{d}h", .{hours}) catch "";
+    const days = @divFloor(hours, 24);
+    return std.fmt.allocPrint(arena, "{d}d", .{days}) catch "";
+}
 
 fn prefixedSubject(buffer: []u8, prefix: []const u8, subject: []const u8) []const u8 {
     if (std.ascii.startsWithIgnoreCase(subject, prefix)) return subject;

@@ -7,28 +7,33 @@
   <separator />
 
   <column grow="1" padding="18" gap="10">
-    <column gap="6">
-      <text size="sm" foreground="text_muted">From</text>
-      <column gap="6" label="Sending account">
+    <row gap="8" cross="center">
+      <text size="sm" foreground="text_muted" width="42">From</text>
+      <row gap="4" label="Sending account" grow="1">
         <for each="composeAccountsView" key="index" as="a">
           <if test="{a.visible}">
-            <button size="sm" variant="outline" selected="{a.selected}" disabled="{composeAccountLocked or composeOperationBusy}" on-press="compose_select_account:{a.index}">{a.email} | {a.provider_name}</button>
+            <if test="{a.selected}">
+              <button size="sm" variant="secondary" icon="check" selected="true" disabled="{composeAccountLocked or composeOperationBusy}" on-press="compose_select_account:{a.index}">{a.email}</button>
+            </if>
+            <else>
+              <button size="sm" variant="ghost" disabled="{composeAccountLocked or composeOperationBusy}" on-press="compose_select_account:{a.index}">{a.email}</button>
+            </else>
           </if>
         </for>
-      </column>
-    </column>
+      </row>
+    </row>
 
     <row gap="8" cross="center">
-      <text-field text="{composeTo}" placeholder="Recipients separated by commas" label="To" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_to_edit" autofocus="true" grow="1" />
+      <text-field text="{composeTo}" placeholder="To" label="To recipients, separated by commas" size="sm" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_to_edit" autofocus="true" grow="1" />
       <button size="sm" variant="ghost" disabled="{composeOperationBusy or composeContentReadOnly}" on-press="compose_toggle_cc_bcc">Cc/Bcc</button>
     </row>
     <if test="{composer.cc_bcc_visible}">
       <row gap="8">
-        <text-field text="{composeCc}" placeholder="Cc recipients" label="Cc" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_cc_edit" grow="1" />
-        <text-field text="{composeBcc}" placeholder="Bcc recipients" label="Bcc" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_bcc_edit" grow="1" />
+        <text-field text="{composeCc}" placeholder="Cc" label="Cc recipients" size="sm" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_cc_edit" grow="1" />
+        <text-field text="{composeBcc}" placeholder="Bcc" label="Bcc recipients" size="sm" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_bcc_edit" grow="1" />
       </row>
     </if>
-    <text-field text="{composeSubject}" placeholder="Subject" label="Subject" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_subject_edit" />
+    <text-field text="{composeSubject}" placeholder="Subject" label="Subject" size="sm" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_subject_edit" />
     <textarea text="{composeBody}" placeholder="Write your message" label="Message body" disabled="{composeOperationBusy or composeContentReadOnly}" on-input="compose_body_edit" on-submit="compose_send" grow="1" />
     <if test="{composeContentReadOnly}">
       <text size="sm" foreground="warning" wrap="true">{composePreservationNotice}</text>

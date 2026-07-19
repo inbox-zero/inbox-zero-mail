@@ -12,6 +12,7 @@ const AppMarkup = canvas.MarkupView(main.Model, main.Msg);
 const ComposeMarkup = canvas.MarkupView(main.Model, main.Msg);
 
 fn buildTree(arena: std.mem.Allocator, model: *const main.Model) !main.MailApp.Ui.Tree {
+    canvas.icons.registerAppIcons(&main.app_icons);
     var view = try AppMarkup.init(arena, main.app_markup);
     var ui = main.MailApp.Ui.init(arena);
     const node = view.build(&ui, model) catch |err| {
@@ -38,7 +39,15 @@ fn findByText(widget: canvas.Widget, kind: canvas.WidgetKind, wanted: []const u8
     return null;
 }
 
-test "markup dispatch selects a message and keeps its structural id" {
+fn findByLabel(widget: canvas.Widget, kind: canvas.WidgetKind, wanted: []const u8) ?canvas.Widget {
+    if (widget.kind == kind and std.mem.eql(u8, widget.semantics.label, wanted)) return widget;
+    for (widget.children) |child| {
+        if (findByLabel(child, kind, wanted)) |found| return found;
+    }
+    return null;
+}
+
+test "compact inbox keeps the selected message available to the detail window" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -62,6 +71,18 @@ test "markup dispatch selects a message and keeps its structural id" {
     _ = parent;
     model.selectThread(0);
     tree = try buildTree(arena, &model);
+    _ = findByText(tree.root, .text, "Release checklist") orelse return error.WidgetNotFound;
+    try std.testing.expectEqualStrings("Everything is ready.", model.selectedBody());
+
+    const item = findByLabel(tree.root, .list_item, model.visibleThreads(arena)[0].accessible) orelse return error.WidgetNotFound;
+    try std.testing.expect(item.semantics.actions.press);
+    try std.testing.expect(item.autofocus);
+    const click_msg = tree.msgForPointer(item.id, .up) orelse return error.MessageNotFound;
+    main.update(&model, click_msg, &fx);
+    try std.testing.expect(model.reading_open);
+    try std.testing.expectEqual(@as(usize, 0), model.open_window_count);
+    tree = try buildTree(arena, &model);
+    _ = findByLabel(tree.root, .button, "Back to inbox") orelse return error.WidgetNotFound;
     _ = findByText(tree.root, .text, "Everything is ready.") orelse return error.WidgetNotFound;
 }
 
@@ -72,6 +93,14 @@ test "keyboard map covers the keyboard-first inbox actions" {
     try std.testing.expectEqual(main.Msg.select_next, main.onKey(key).?);
     key.key = "k";
     try std.testing.expectEqual(main.Msg.select_previous, main.onKey(key).?);
+    key.key = "arrowdown";
+    try std.testing.expectEqual(main.Msg.select_next, main.onKey(key).?);
+    key.key = "arrowup";
+    try std.testing.expectEqual(main.Msg.select_previous, main.onKey(key).?);
+    key.key = "enter";
+    try std.testing.expectEqual(main.Msg.activate_selected, main.onKey(key).?);
+    key.key = "escape";
+    try std.testing.expectEqual(main.Msg.close_reading, main.onKey(key).?);
     key.key = "e";
     try std.testing.expectEqual(main.Msg.archive_selected, main.onKey(key).?);
     key.key = "d";
@@ -97,6 +126,11 @@ test "keyboard messages navigate the visible inbox through update" {
     try std.testing.expectEqual(@as(usize, 1), model.selected_thread);
     main.update(&model, .select_previous, &fx);
     try std.testing.expectEqual(@as(usize, 0), model.selected_thread);
+    main.update(&model, .activate_selected, &fx);
+    try std.testing.expect(model.reading_open);
+    try std.testing.expectEqual(@as(usize, 0), model.open_window_count);
+    main.update(&model, .close_reading, &fx);
+    try std.testing.expect(!model.reading_open);
 }
 
 test "boot starts all configured account fetches through fake effects" {
@@ -162,6 +196,85 @@ test "three message windows and one composer fit the Native SDK window budget" {
     try std.testing.expectEqual(@as(usize, 4), windows.len);
     try std.testing.expectEqualStrings("compose", windows[3].label);
     try std.testing.expectEqualStrings("compose-canvas", windows[3].canvas_label);
+}
+
+test "inbox windows keep independent presentation state over one shared mail store" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = main.initialModel();
+    model.addAccount(.gmail, "alpha@example.com", "Alpha", "", "");
+    model.addAccount(.microsoft, "beta@example.com", "Beta", "", "");
+
+    var alpha = mail.MailThread{ .account_index = 0, .unread = true };
+    alpha.provider_thread_id.set("alpha-thread");
+    alpha.subject.set("Alpha message");
+    _ = model.addThread(alpha);
+
+    var beta = mail.MailThread{ .account_index = 1 };
+    beta.provider_thread_id.set("beta-thread");
+    beta.subject.set("Beta message");
+    _ = model.addThread(beta);
+
+    model.openInboxWindow(mail.max_accounts);
+    model.openInboxWindow(0);
+    try std.testing.expectEqual(@as(usize, 2), model.inbox_window_count);
+
+    const all_id = model.inbox_windows[0].id;
+    const alpha_id = model.inbox_windows[1].id;
+    model.setInboxWindowFilter(.{ .window_id = alpha_id, .filter = .unread });
+
+    try std.testing.expectEqual(mail.InboxFilter.all, model.inbox_windows[0].filter);
+    try std.testing.expectEqual(mail.InboxFilter.unread, model.inbox_windows[1].filter);
+    try std.testing.expectEqual(@as(usize, 2), model.inboxWindowThreads(&model.inbox_windows[0], arena).len);
+    try std.testing.expectEqual(@as(usize, 1), model.inboxWindowThreads(&model.inbox_windows[1], arena).len);
+    try std.testing.expectEqualStrings("Alpha message", model.inboxWindowThreads(&model.inbox_windows[1], arena)[0].subject);
+
+    const main_selection = model.selected_thread;
+    model.openInboxWindowThread(.{ .window_id = all_id, .thread_id = model.threads[1].id.value });
+    try std.testing.expect(model.inbox_windows[0].reading);
+    try std.testing.expectEqual(model.threads[1].id.value, model.inbox_windows[0].selected_thread_id.value);
+    try std.testing.expectEqual(main_selection, model.selected_thread);
+    model.closeInboxWindowThread(all_id);
+    try std.testing.expect(!model.inbox_windows[0].reading);
+    try std.testing.expectEqual(model.threads[1].id.value, model.inbox_windows[0].selected_thread_id.value);
+
+    model.closeInboxWindow(all_id);
+    try std.testing.expectEqual(@as(usize, 1), model.inbox_window_count);
+    try std.testing.expectEqual(alpha_id, model.inbox_windows[0].id);
+    try std.testing.expectEqual(@as(usize, 2), model.thread_count);
+}
+
+test "archive mutation is immediately reflected by every inbox window" {
+    var model = main.initialModel();
+    model.addAccount(.gmail, "alpha@example.com", "Alpha", "", "");
+
+    var thread = mail.MailThread{ .account_index = 0, .unread = true };
+    thread.provider_thread_id.set("shared-archive-thread");
+    thread.provider_message_id.set("shared-archive-message");
+    thread.subject.set("Shared archive");
+    _ = model.addThread(thread);
+
+    model.openInboxWindow(mail.max_accounts);
+    model.openInboxWindow(0);
+    try std.testing.expectEqual(@as(usize, 1), model.inboxWindowCount(&model.inbox_windows[0], .all));
+    try std.testing.expectEqual(@as(usize, 1), model.inboxWindowCount(&model.inbox_windows[1], .all));
+
+    var fx = main.Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    main.update(&model, .archive_selected, &fx);
+
+    try std.testing.expectEqual(@as(usize, 0), model.inboxWindowCount(&model.inbox_windows[0], .all));
+    try std.testing.expectEqual(@as(usize, 0), model.inboxWindowCount(&model.inbox_windows[1], .all));
+    try std.testing.expectEqual(@as(usize, 1), model.inboxWindowCount(&model.inbox_windows[0], .archive));
+    try std.testing.expectEqual(@as(usize, 1), model.inboxWindowCount(&model.inbox_windows[1], .archive));
+}
+
+test "native commands expose new inbox window and command palette" {
+    try std.testing.expectEqual(main.Msg.open_all_inbox_window, main.onCommand("mail.new-window").?);
+    try std.testing.expectEqual(main.Msg.toggle_command_palette, main.onCommand("mail.command-palette").?);
 }
 
 test "archive action queues the provider mutation and rolls back" {
