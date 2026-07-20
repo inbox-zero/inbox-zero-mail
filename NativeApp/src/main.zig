@@ -74,6 +74,13 @@ pub const Msg = union(enum) {
     toggle_drawer,
     toggle_search,
     toggle_command_palette,
+    navigate_next,
+    navigate_previous,
+    activate_context,
+    escape_context,
+    cycle_split_next,
+    cycle_split_previous,
+    run_palette_command: usize,
     open_all_inbox_window,
     open_inbox_window: usize,
     close_inbox_window: u64,
@@ -145,6 +152,11 @@ pub const Msg = union(enum) {
 
     pub const view_unbound = .{
         "open_all_inbox_window",
+        "navigate_next",
+        "navigate_previous",
+        "escape_context",
+        "cycle_split_next",
+        "cycle_split_previous",
         "select_thread",
         "select_next",
         "select_previous",
@@ -250,8 +262,28 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .toggle_command_palette => {
             model.command_palette_open = !model.command_palette_open;
-            if (model.command_palette_open) model.drawer_open = false;
+            if (model.command_palette_open) {
+                model.drawer_open = false;
+                model.palette_selected = 0;
+            }
         },
+        .navigate_next => if (model.command_palette_open) model.movePaletteSelection(1) else model.selectRelative(1),
+        .navigate_previous => if (model.command_palette_open) model.movePaletteSelection(-1) else model.selectRelative(-1),
+        .activate_context => if (model.command_palette_open)
+            runPaletteCommand(model, model.selectedPaletteCommand(), fx)
+        else
+            model.activateSelected(),
+        .escape_context => {
+            if (model.command_palette_open)
+                model.command_palette_open = false
+            else if (model.drawer_open)
+                model.drawer_open = false
+            else
+                model.closeReading();
+        },
+        .cycle_split_next => if (!model.command_palette_open) model.cyclePrimarySplit(1),
+        .cycle_split_previous => if (!model.command_palette_open) model.cyclePrimarySplit(-1),
+        .run_palette_command => |command_id| runPaletteCommand(model, command_id, fx),
         .open_all_inbox_window => model.openInboxWindow(mail.max_accounts),
         .open_inbox_window => |account_index| {
             model.openInboxWindow(account_index);
@@ -283,7 +315,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.selectAccount(index);
             model.drawer_open = false;
         },
-        .set_filter => |filter| {
+        .set_filter => |filter| if (!model.command_palette_open) {
             model.selectFilter(filter);
             model.drawer_open = false;
         },
@@ -301,15 +333,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.search_requested = false;
             model.reconcileSelection();
         },
-        .focus_search => {
+        .focus_search => if (!model.command_palette_open) {
             model.search_visible = true;
             model.search_requested = true;
         },
-        .refresh => {
-            model.now_ms = fx.wallMs();
-            model.status_message.set("Refreshing all accounts.");
-            providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
-        },
+        .refresh => refreshMail(model, fx),
         .connect_gmail => beginOAuth(model, fx, .gmail),
         .connect_outlook => beginOAuth(model, fx, .microsoft),
         .cancel_oauth => {
@@ -339,11 +367,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .sidebar_resized => |fraction| model.sidebar_split = fraction,
         .list_resized => |fraction| model.list_split = fraction,
-        .archive_selected => performMutation(model, .archive, fx),
-        .trash_selected => performMutation(model, .trash, fx),
-        .toggle_read_selected => performMutation(model, .toggle_read, fx),
-        .toggle_star_selected => performMutation(model, .toggle_star, fx),
-        .snooze_selected => {
+        .archive_selected => if (!model.command_palette_open) performMutation(model, .archive, fx),
+        .trash_selected => if (!model.command_palette_open) performMutation(model, .trash, fx),
+        .toggle_read_selected => if (!model.command_palette_open) performMutation(model, .toggle_read, fx),
+        .toggle_star_selected => if (!model.command_palette_open) performMutation(model, .toggle_star, fx),
+        .snooze_selected => if (!model.command_palette_open) {
             if (model.selectedMut()) |thread| {
                 thread.snoozed = !thread.snoozed;
                 model.status_message.set(if (thread.snoozed) "Message snoozed locally." else "Message returned from snooze.");
@@ -354,10 +382,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .activate_selected => model.activateSelected(),
         .close_reading => model.closeReading(),
         .close_window => |index| model.closeWindow(index),
-        .compose_new => if (!model.composeBusy()) model.beginNewCompose(),
-        .compose_reply => if (!model.composeBusy()) model.beginMessageCompose(.reply),
-        .compose_reply_all => if (!model.composeBusy()) model.beginMessageCompose(.reply_all),
-        .compose_forward => if (!model.composeBusy()) model.beginMessageCompose(.forward),
+        .compose_new => if (!model.command_palette_open and !model.composeBusy()) model.beginNewCompose(),
+        .compose_reply => if (!model.command_palette_open and !model.composeBusy()) model.beginMessageCompose(.reply),
+        .compose_reply_all => if (!model.command_palette_open and !model.composeBusy()) model.beginMessageCompose(.reply_all),
+        .compose_forward => if (!model.command_palette_open and !model.composeBusy()) model.beginMessageCompose(.forward),
         .compose_close => outbound.save(model, fx, Effects.responseMsg(.outbound_response), Effects.hostMsg(.authorized_outbound_response), true),
         .compose_discard => outbound.discard(model, fx, Effects.responseMsg(.outbound_response), Effects.hostMsg(.authorized_outbound_response)),
         .compose_toggle_cc_bcc => model.composer.cc_bcc_visible = !model.composer.cc_bcc_visible,
@@ -406,6 +434,33 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
             }
             showReconnectIfNeeded(model, result);
+        },
+    }
+}
+
+fn refreshMail(model: *Model, fx: *Effects) void {
+    model.now_ms = fx.wallMs();
+    model.status_message.set("Refreshing all accounts.");
+    providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
+}
+
+fn runPaletteCommand(model: *Model, command_id: usize, fx: *Effects) void {
+    model.command_palette_open = false;
+    switch (command_id) {
+        mail.palette_compose => if (!model.composeBusy()) model.beginNewCompose(),
+        mail.palette_search => {
+            model.search_visible = true;
+            model.search_requested = true;
+        },
+        mail.palette_refresh => refreshMail(model, fx),
+        mail.palette_show_all => model.selectFilter(.all),
+        mail.palette_show_unread => model.selectFilter(.unread),
+        mail.palette_show_starred => model.selectFilter(.starred),
+        mail.palette_show_snoozed => model.selectFilter(.snoozed),
+        mail.palette_show_notifications => model.selectFilter(.notifications),
+        mail.palette_open_all_window => model.openInboxWindow(mail.max_accounts),
+        else => if (command_id >= mail.palette_account_base) {
+            model.openInboxWindow(command_id - mail.palette_account_base);
         },
     }
 }
@@ -561,14 +616,15 @@ pub fn onKey(keyboard: canvas.WidgetKeyboardEvent) ?Msg {
     if (keyboard.phase != .key_down) return null;
     const key = keyboard.key;
     if (keyboard.modifiers.hasNavigationModifier()) return null;
-    if (std.ascii.eqlIgnoreCase(key, "escape")) return .close_reading;
+    if (std.ascii.eqlIgnoreCase(key, "escape")) return .escape_context;
+    if (std.ascii.eqlIgnoreCase(key, "tab")) return if (keyboard.modifiers.shift) .cycle_split_previous else .cycle_split_next;
     if (keyboard.modifiers.shift) {
         if (std.ascii.eqlIgnoreCase(key, "u")) return .toggle_read_selected;
         return null;
     }
-    if (std.ascii.eqlIgnoreCase(key, "j") or std.ascii.eqlIgnoreCase(key, "arrowdown")) return .select_next;
-    if (std.ascii.eqlIgnoreCase(key, "k") or std.ascii.eqlIgnoreCase(key, "arrowup")) return .select_previous;
-    if (std.ascii.eqlIgnoreCase(key, "enter") or std.ascii.eqlIgnoreCase(key, "o")) return .activate_selected;
+    if (std.ascii.eqlIgnoreCase(key, "j") or std.ascii.eqlIgnoreCase(key, "arrowdown")) return .navigate_next;
+    if (std.ascii.eqlIgnoreCase(key, "k") or std.ascii.eqlIgnoreCase(key, "arrowup")) return .navigate_previous;
+    if (std.ascii.eqlIgnoreCase(key, "enter") or std.ascii.eqlIgnoreCase(key, "o")) return .activate_context;
     if (std.ascii.eqlIgnoreCase(key, "e")) return .archive_selected;
     if (std.ascii.eqlIgnoreCase(key, "s")) return .toggle_star_selected;
     if (std.ascii.eqlIgnoreCase(key, "h")) return .snooze_selected;
@@ -587,6 +643,8 @@ pub fn onCommand(name: []const u8) ?Msg {
     if (std.mem.eql(u8, name, "mail.open-window")) return .open_selected_window;
     if (std.mem.eql(u8, name, "mail.new-window")) return .open_all_inbox_window;
     if (std.mem.eql(u8, name, "mail.command-palette")) return .toggle_command_palette;
+    if (std.mem.eql(u8, name, "mail.next-split")) return .cycle_split_next;
+    if (std.mem.eql(u8, name, "mail.previous-split")) return .cycle_split_previous;
     if (std.mem.eql(u8, name, "mail.compose")) return .compose_new;
     return null;
 }

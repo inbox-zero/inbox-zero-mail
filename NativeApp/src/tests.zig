@@ -90,17 +90,22 @@ test "keyboard map covers the keyboard-first inbox actions" {
     const base = canvas.WidgetKeyboardEvent{ .phase = .key_down };
     var key = base;
     key.key = "j";
-    try std.testing.expectEqual(main.Msg.select_next, main.onKey(key).?);
+    try std.testing.expectEqual(main.Msg.navigate_next, main.onKey(key).?);
     key.key = "k";
-    try std.testing.expectEqual(main.Msg.select_previous, main.onKey(key).?);
+    try std.testing.expectEqual(main.Msg.navigate_previous, main.onKey(key).?);
     key.key = "arrowdown";
-    try std.testing.expectEqual(main.Msg.select_next, main.onKey(key).?);
+    try std.testing.expectEqual(main.Msg.navigate_next, main.onKey(key).?);
     key.key = "arrowup";
-    try std.testing.expectEqual(main.Msg.select_previous, main.onKey(key).?);
+    try std.testing.expectEqual(main.Msg.navigate_previous, main.onKey(key).?);
     key.key = "enter";
-    try std.testing.expectEqual(main.Msg.activate_selected, main.onKey(key).?);
+    try std.testing.expectEqual(main.Msg.activate_context, main.onKey(key).?);
     key.key = "escape";
-    try std.testing.expectEqual(main.Msg.close_reading, main.onKey(key).?);
+    try std.testing.expectEqual(main.Msg.escape_context, main.onKey(key).?);
+    key.key = "tab";
+    try std.testing.expectEqual(main.Msg.cycle_split_next, main.onKey(key).?);
+    key.modifiers.shift = true;
+    try std.testing.expectEqual(main.Msg.cycle_split_previous, main.onKey(key).?);
+    key.modifiers.shift = false;
     key.key = "e";
     try std.testing.expectEqual(main.Msg.archive_selected, main.onKey(key).?);
     key.key = "d";
@@ -275,6 +280,56 @@ test "archive mutation is immediately reflected by every inbox window" {
 test "native commands expose new inbox window and command palette" {
     try std.testing.expectEqual(main.Msg.open_all_inbox_window, main.onCommand("mail.new-window").?);
     try std.testing.expectEqual(main.Msg.toggle_command_palette, main.onCommand("mail.command-palette").?);
+    try std.testing.expectEqual(main.Msg.cycle_split_next, main.onCommand("mail.next-split").?);
+    try std.testing.expectEqual(main.Msg.cycle_split_previous, main.onCommand("mail.previous-split").?);
+}
+
+test "command palette starts on a keyboard-operable command row" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var model = main.initialModel();
+    model.command_palette_open = true;
+
+    const tree = try buildTree(arena, &model);
+    const first = findByLabel(tree.root, .list_item, "Compose") orelse return error.WidgetNotFound;
+    try std.testing.expect(first.autofocus);
+    try std.testing.expect(first.semantics.actions.press);
+    const enter = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter" };
+    try std.testing.expectEqual(main.Msg.activate_context, tree.msgForKeyboard(first.id, enter).?);
+}
+
+test "command palette owns arrow navigation and activation" {
+    var model = main.initialModel();
+    var fx = main.Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    const inbox_selection = model.selected_thread;
+
+    main.update(&model, .toggle_command_palette, &fx);
+    main.update(&model, .navigate_next, &fx);
+    try std.testing.expectEqual(@as(usize, 1), model.palette_selected);
+    try std.testing.expectEqual(inbox_selection, model.selected_thread);
+
+    main.update(&model, .activate_context, &fx);
+    try std.testing.expect(!model.command_palette_open);
+    try std.testing.expect(model.search_visible);
+    try std.testing.expect(model.search_requested);
+}
+
+test "tab commands cycle the primary split inboxes" {
+    var model = main.initialModel();
+    var fx = main.Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    try std.testing.expectEqual(mail.InboxFilter.all, model.filter);
+    main.update(&model, .cycle_split_next, &fx);
+    try std.testing.expectEqual(mail.InboxFilter.unread, model.filter);
+    main.update(&model, .cycle_split_previous, &fx);
+    try std.testing.expectEqual(mail.InboxFilter.all, model.filter);
+    main.update(&model, .cycle_split_previous, &fx);
+    try std.testing.expectEqual(mail.InboxFilter.notifications, model.filter);
 }
 
 test "archive action queues the provider mutation and rolls back" {

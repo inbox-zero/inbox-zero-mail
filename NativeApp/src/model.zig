@@ -46,6 +46,27 @@ pub const AccountView = struct {
     sync_label: []const u8,
 };
 
+pub const PaletteCommandView = struct {
+    id: usize,
+    title: []const u8,
+    detail: []const u8,
+    icon: []const u8,
+    shortcut: []const u8,
+    selected: bool,
+};
+
+pub const palette_compose: usize = 0;
+pub const palette_search: usize = 1;
+pub const palette_refresh: usize = 2;
+pub const palette_show_all: usize = 3;
+pub const palette_show_unread: usize = 4;
+pub const palette_show_starred: usize = 5;
+pub const palette_show_snoozed: usize = 6;
+pub const palette_show_notifications: usize = 7;
+pub const palette_open_all_window: usize = 8;
+pub const palette_fixed_count: usize = 9;
+pub const palette_account_base: usize = 100;
+
 pub const ThreadView = struct {
     id: u64,
     index: usize,
@@ -145,6 +166,7 @@ pub const Model = struct {
     inbox_window_count: usize = 0,
     next_inbox_window_id: u64 = 1,
     command_palette_open: bool = false,
+    palette_selected: usize = 0,
 
     pub const filters = [_]InboxFilter{ .all, .unread, .starred, .snoozed, .archive, .trash, .drafts };
     pub const view_unbound = .{
@@ -183,6 +205,7 @@ pub const Model = struct {
         "inbox_windows",
         "inbox_window_count",
         "next_inbox_window_id",
+        "palette_selected",
         "selectedUnread",
         "selectedStarred",
         "hasSelection",
@@ -198,6 +221,8 @@ pub const Model = struct {
         "visibleDraftCount",
         "filters",
         "composeOpen",
+        "paletteCommandCount",
+        "selectedPaletteCommand",
     };
 
     pub fn search(model: *const Model) []const u8 {
@@ -513,6 +538,77 @@ pub const Model = struct {
             };
         }
         return out;
+    }
+
+    pub fn paletteCommands(model: *const Model, arena: std.mem.Allocator) []const PaletteCommandView {
+        const out = arena.alloc(PaletteCommandView, model.paletteCommandCount()) catch return &.{};
+        const fixed = [_]PaletteCommandView{
+            .{ .id = palette_compose, .title = "Compose", .detail = "Write a new message", .icon = "edit", .shortcut = "C", .selected = false },
+            .{ .id = palette_search, .title = "Search mail", .detail = "Find messages and drafts", .icon = "search", .shortcut = "/", .selected = false },
+            .{ .id = palette_refresh, .title = "Refresh mail", .detail = "Sync every connected account", .icon = "refresh-cw", .shortcut = "Cmd R", .selected = false },
+            .{ .id = palette_show_all, .title = "Go to All", .detail = "Show the combined inbox", .icon = "folder-open", .shortcut = "", .selected = false },
+            .{ .id = palette_show_unread, .title = "Go to Unread", .detail = "Show unread messages", .icon = "circle-dot", .shortcut = "", .selected = false },
+            .{ .id = palette_show_starred, .title = "Go to Starred", .detail = "Show starred messages", .icon = "app:star", .shortcut = "", .selected = false },
+            .{ .id = palette_show_snoozed, .title = "Go to Snoozed", .detail = "Show snoozed messages", .icon = "clock", .shortcut = "", .selected = false },
+            .{ .id = palette_show_notifications, .title = "Go to Notifications", .detail = "Show notification mail", .icon = "info", .shortcut = "", .selected = false },
+            .{ .id = palette_open_all_window, .title = "Open All Inboxes window", .detail = "Open the combined inbox in another window", .icon = "external-link", .shortcut = "Cmd N", .selected = false },
+        };
+        for (fixed, 0..) |command, index| {
+            out[index] = command;
+            out[index].selected = model.palette_selected == index;
+        }
+        for (model.accounts[0..model.account_count], 0..) |*account, account_index| {
+            const index = palette_fixed_count + account_index;
+            out[index] = .{
+                .id = palette_account_base + account_index,
+                .title = account.displayName(),
+                .detail = account.emailSlice(),
+                .icon = "external-link",
+                .shortcut = "",
+                .selected = model.palette_selected == index,
+            };
+        }
+        return out;
+    }
+
+    pub fn paletteCommandCount(model: *const Model) usize {
+        return palette_fixed_count + model.account_count;
+    }
+
+    pub fn selectedPaletteCommand(model: *const Model) usize {
+        if (model.palette_selected < palette_fixed_count) return model.palette_selected;
+        const account_index = model.palette_selected - palette_fixed_count;
+        return palette_account_base + @min(account_index, model.account_count -| 1);
+    }
+
+    pub fn movePaletteSelection(model: *Model, delta: isize) void {
+        const count = model.paletteCommandCount();
+        if (count == 0) return;
+        if (delta > 0) {
+            model.palette_selected = (model.palette_selected + 1) % count;
+        } else if (model.palette_selected == 0) {
+            model.palette_selected = count - 1;
+        } else {
+            model.palette_selected -= 1;
+        }
+    }
+
+    pub fn cyclePrimarySplit(model: *Model, delta: isize) void {
+        const primary = [_]InboxFilter{ .all, .unread, .starred, .snoozed, .notifications };
+        var current: usize = 0;
+        for (primary, 0..) |filter, index| {
+            if (model.filter == filter) {
+                current = index;
+                break;
+            }
+        }
+        const next = if (delta > 0)
+            (current + 1) % primary.len
+        else if (current == 0)
+            primary.len - 1
+        else
+            current - 1;
+        model.selectFilter(primary[next]);
     }
 
     pub fn visibleThreads(model: *const Model, arena: std.mem.Allocator) []const ThreadView {

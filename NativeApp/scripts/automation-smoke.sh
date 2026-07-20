@@ -17,8 +17,12 @@ run_native() {
 # This script deliberately does not start or stop shared services. The emulator
 # and an automation-enabled app instance must already be running from APP_DIR.
 run_native automate wait
-# Normalize any drawer left open by an interrupted manual or automation run.
+# Normalize any modal and return to the All split after an interrupted run.
 run_native automate widget-key mail-canvas escape
+run_native automate focus mail-canvas
+run_native automate shortcut mail.command-palette
+for _ in $(seq 1 3); do run_native automate widget-key mail-canvas arrowdown; done
+run_native automate widget-key mail-canvas enter
 run_native automate assert --timeout-ms 30000 \
   'role=tab name="All  [0-9]+"' \
   'role=tab name="Unread  [0-9]+"' \
@@ -56,12 +60,13 @@ run_native automate focus mail-canvas
 run_native automate shortcut mail.command-palette
 run_native automate assert --timeout-ms 5000 \
   'role=dialog name="Command palette"' \
-  'role=button name="All accounts"' \
-  'role=button name="Alpha Inbox"' \
-  'Command N: new All Inboxes window'
-all_accounts_id="$(widget_id button 'All accounts')"
-[[ -n "${all_accounts_id}" ]]
-run_native automate widget-click mail-canvas "${all_accounts_id}"
+  'role=listitem name="Compose".*focused=true.*selected' \
+  'role=listitem name="Search mail"' \
+  'role=listitem name="Open All Inboxes window"' \
+  'Up/Down to navigate.*Enter to open.*Esc to close'
+for _ in $(seq 1 8); do run_native automate widget-key mail-canvas arrowdown; done
+run_native automate assert --timeout-ms 5000 'role=listitem name="Open All Inboxes window".*focused=true.*selected'
+run_native automate widget-key mail-canvas enter
 run_native automate assert --timeout-ms 5000 \
   'view @w[0-9]+/inbox-canvas-1' \
   'inbox-canvas-1.*role=text name="All Inboxes"'
@@ -70,9 +75,28 @@ run_native automate screenshot inbox-canvas-1
 run_native automate focus mail-canvas
 run_native automate shortcut mail.command-palette
 run_native automate assert --timeout-ms 5000 'role=dialog name="Command palette"'
-alpha_account_id="$(widget_id button 'Alpha Inbox')"
-[[ -n "${alpha_account_id}" ]]
-run_native automate widget-click mail-canvas "${alpha_account_id}"
+run_native automate widget-key mail-canvas arrowdown
+run_native automate assert --timeout-ms 5000 \
+  'role=listitem name="Search mail".*focused=true.*selected' \
+  'role=listitem name="Compose".*value=0'
+run_native automate widget-key mail-canvas enter
+run_native automate assert --timeout-ms 5000 \
+  'role=textbox name="Search mail".*focused=true'
+search_id="$(widget_id button Search)"
+[[ -n "${search_id}" ]]
+run_native automate widget-click mail-canvas "${search_id}"
+
+# Tab and Shift-Tab move between the top split inboxes.
+run_native automate widget-key mail-canvas tab
+run_native automate assert --timeout-ms 5000 'role=tab name="Unread  [0-9]+".*selected'
+for _ in $(seq 1 4); do run_native automate widget-key mail-canvas tab; done
+run_native automate assert --timeout-ms 5000 'role=tab name="All  [0-9]+".*selected'
+
+# Open a specific account window from the expanded palette command list.
+run_native automate shortcut mail.command-palette
+for _ in $(seq 1 9); do run_native automate widget-key mail-canvas arrowdown; done
+run_native automate assert --timeout-ms 5000 'role=listitem name="Alpha Inbox".*selected'
+run_native automate widget-key mail-canvas enter
 run_native automate assert --timeout-ms 5000 \
   'view @w[0-9]+/inbox-canvas-2' \
   'inbox-canvas-2.*role=text name="Alpha Inbox"' \
