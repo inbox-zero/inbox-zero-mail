@@ -7,6 +7,7 @@ const providers = @import("providers.zig");
 const outbound = @import("app/outbound.zig");
 const native_services = @import("platform/native_services.zig");
 const oauth_wire = @import("auth/wire.zig");
+const release_oauth = @import("config/release_oauth.zig");
 
 pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
@@ -217,11 +218,12 @@ fn productionInitialModel(init: std.process.Init) Model {
 fn oauthSettings(init: std.process.Init) native_services.OAuthSettings {
     const emulate_value = init.environ_map.get("INBOX_ZERO_EMULATE") orelse "";
     const emulate = std.mem.eql(u8, emulate_value, "1") or std.ascii.eqlIgnoreCase(emulate_value, "true");
+    const packaged: release_oauth.Config = if (emulate) .{} else release_oauth.load(init);
     return .{
         .emulate = emulate,
-        .gmail_client_id = init.environ_map.get(if (emulate) "INBOX_ZERO_GMAIL_EMULATOR_CLIENT_ID" else "INBOX_ZERO_GMAIL_CLIENT_ID") orelse "",
-        .gmail_client_secret = init.environ_map.get(if (emulate) "INBOX_ZERO_GMAIL_EMULATOR_CLIENT_SECRET" else "INBOX_ZERO_GMAIL_CLIENT_SECRET") orelse "",
-        .microsoft_client_id = init.environ_map.get(if (emulate) "INBOX_ZERO_OUTLOOK_EMULATOR_CLIENT_ID" else "INBOX_ZERO_OUTLOOK_CLIENT_ID") orelse "",
+        .gmail_client_id = init.environ_map.get(if (emulate) "INBOX_ZERO_GMAIL_EMULATOR_CLIENT_ID" else "INBOX_ZERO_GMAIL_CLIENT_ID") orelse packaged.gmail_client_id,
+        .gmail_client_secret = init.environ_map.get(if (emulate) "INBOX_ZERO_GMAIL_EMULATOR_CLIENT_SECRET" else "INBOX_ZERO_GMAIL_CLIENT_SECRET") orelse packaged.gmail_client_secret,
+        .microsoft_client_id = init.environ_map.get(if (emulate) "INBOX_ZERO_OUTLOOK_EMULATOR_CLIENT_ID" else "INBOX_ZERO_OUTLOOK_CLIENT_ID") orelse packaged.outlook_client_id,
         .microsoft_client_secret = init.environ_map.get(if (emulate) "INBOX_ZERO_OUTLOOK_EMULATOR_CLIENT_SECRET" else "INBOX_ZERO_OUTLOOK_CLIENT_SECRET") orelse "",
     };
 }
@@ -497,6 +499,11 @@ pub fn authorizedResponse(result: native_sdk.EffectHostResult) native_sdk.Effect
 }
 
 fn beginOAuth(model: *Model, fx: *Effects, provider: mail.ProviderKind) void {
+    const available = if (provider == .gmail) model.gmail_available else model.outlook_available;
+    if (!available) {
+        model.status_message.set(if (provider == .gmail) "Gmail is not configured in this build." else "Outlook is not configured in this build.");
+        return;
+    }
     const key = model.beginOAuth() orelse {
         model.status_message.set(if (model.account_count >= mail.max_accounts) "The four-account limit has been reached." else "An account connection is already in progress.");
         return;
@@ -555,7 +562,17 @@ fn handleRestoreResult(model: *Model, result: native_sdk.EffectHostResult, fx: *
 fn finishRestore(model: *Model, fx: *Effects) void {
     if (model.restore_pending != 0) return;
     if (model.account_count == 0) {
-        model.status_message.set(if (model.restore_failed) "Saved accounts could not be restored. Check OAuth configuration and credential storage." else "Connect Gmail or Outlook to get started.");
+        if (model.restore_failed) {
+            model.status_message.set("Saved accounts could not be restored. Check OAuth configuration and credential storage.");
+        } else if (model.gmail_available and model.outlook_available) {
+            model.status_message.set("Connect Gmail or Outlook to get started.");
+        } else if (model.gmail_available) {
+            model.status_message.set("Connect Gmail to get started.");
+        } else if (model.outlook_available) {
+            model.status_message.set("Connect Outlook to get started.");
+        } else {
+            model.status_message.set("This build has no mail provider configured.");
+        }
         return;
     }
     model.status_message.set(if (model.restore_failed) "Some saved accounts could not be restored. Synchronizing the available accounts." else "Restored saved accounts. Synchronizing mail.");
@@ -866,6 +883,7 @@ fn detailWindow(ui: *MailApp.Ui, model: *const Model, thread: *const mail.MailTh
 
 pub fn main(init: std.process.Init) !void {
     canvas.icons.registerAppIcons(&app_icons);
+    const oauth_settings = oauthSettings(init);
     const app_state = try MailApp.create(std.heap.page_allocator, .{
         .name = "inbox-zero-mail-native",
         .scene = shell_scene,
@@ -888,10 +906,20 @@ pub fn main(init: std.process.Init) !void {
     });
     defer app_state.destroy();
     app_state.model = productionInitialModel(init);
+    app_state.model.gmail_available = oauth_settings.emulate or oauth_settings.gmail_client_id.len > 0;
+    app_state.model.outlook_available = oauth_settings.emulate or oauth_settings.microsoft_client_id.len > 0;
+    app_state.model.demo_mode = oauth_settings.emulate;
+    if (!oauth_settings.emulate and app_state.model.account_count == 0) {
+        if (app_state.model.gmail_available and !app_state.model.outlook_available) {
+            app_state.model.status_message.set("Connect Gmail to get started.");
+        } else if (!app_state.model.gmail_available and !app_state.model.outlook_available) {
+            app_state.model.status_message.set("This build has no mail provider configured.");
+        }
+    }
 
     // RuntimeServices must outlive the runner: it owns the trusted boundary
     // for system-browser and OS-credential operations.
-    var services = native_services.RuntimeServices(Effects).initWithOAuth(app_state.app(), &app_state.effects, oauthSettings(init));
+    var services = native_services.RuntimeServices(Effects).initWithOAuth(app_state.app(), &app_state.effects, oauth_settings);
 
     try runner.runWithOptions(services.app(), .{
         .app_name = "inbox-zero-mail-native",
@@ -918,6 +946,7 @@ test {
     _ = @import("auth/pkce.zig");
     _ = @import("auth/session.zig");
     _ = @import("auth/wire.zig");
+    _ = @import("config/release_oauth.zig");
     _ = @import("tests.zig");
     _ = @import("model.zig");
     _ = @import("providers.zig");

@@ -1,0 +1,5 @@
+{
+  "gmail_client_id": "your-desktop-client-id.apps.googleusercontent.com",
+  "gmail_client_secret": "your-desktop-client-secret",
+  "outlook_client_id": ""
+}

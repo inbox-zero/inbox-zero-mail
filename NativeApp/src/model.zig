@@ -158,6 +158,9 @@ pub const Model = struct {
     disconnect_account_id: AccountId = .{},
     restore_pending: u8 = 0,
     restore_failed: bool = false,
+    gmail_available: bool = true,
+    outlook_available: bool = true,
+    demo_mode: bool = false,
 
     // Secondary windows own only scope/filter/selection state. They retain
     // stable domain IDs instead of array indexes so refreshes cannot silently

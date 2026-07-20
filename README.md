@@ -1,12 +1,12 @@
 # Inbox Zero Mail
 
-**The open-source, privacy-first, native macOS email client.** Built in Swift for people who want email to feel fast, private, and fully under their control.
+**The open-source, privacy-first native desktop email client.** The current client is built with Native SDK using declarative native markup and Zig, without Electron or an embedded browser runtime.
 
 ![Inbox Zero Mail inbox](docs/screenshot.png)
 
 ## Why Inbox Zero Mail?
 
-Most modern email clients are Electron apps that can eat 2 GB of RAM just to show your inbox. Inbox Zero Mail is a real macOS app, built with SwiftUI, that typically uses ~100 MB. It launches quickly, scrolls smoothly, and stays out of the way.
+Most modern email clients are Electron apps. Inbox Zero Mail uses Native SDK's native renderer and keeps mail state and provider logic in Zig. The earlier Swift implementation remains in this repository while the Native SDK client reaches parity.
 
 It is also yours. The code is open source, the architecture is modular, and the app is easy to hack on: point Claude Code, Codex, or your editor at the repo and change the workflow, UI, shortcuts, or provider behavior to match how you actually handle email.
 
@@ -17,8 +17,8 @@ It is also yours. The code is open source, the architecture is modular, and the 
 ## Highlights
 
 - 🛠️ **Open source & hackable** -- fork it, theme it, add features, or ask Claude Code/Codex to make the email client you want.
-- 🔒 **Privacy-first** -- your mail talks directly to Gmail today, with Microsoft/Outlook support coming soon. Remote images are routed through a privacy proxy by default, so senders do not get your IP just because you opened an email.
-- ⚡ **Native Swift + SwiftUI** -- ~100 MB of RAM vs. 2 GB for Electron-based alternatives. Instant launch, smooth scrolling, no lag.
+- 🔒 **Privacy-first** -- your mail talks directly to Gmail or Microsoft Graph and OAuth tokens stay in the operating system credential store.
+- ⚡ **Native SDK + Zig** -- native-rendered UI without an Electron or WebView application shell.
 - 📬 **First-class multi-address support** -- connect multiple Gmail accounts today, with Outlook/Microsoft support coming soon. See every address in one unified view, split inbox tabs, or separate windows.
 - ⌨️ **Keyboard-first workflow** -- navigate your entire inbox without touching the mouse. Archive, reply, star, snooze, switch views, and run actions from the keyboard.
 - 🔎 **Command palette** (<kbd>Cmd</kbd>+<kbd>K</kbd>) -- jump to any action, account, or label instantly.
@@ -29,7 +29,7 @@ It is also yours. The code is open source, the architecture is modular, and the 
 | Feature | Status |
 |---|---|
 | Gmail support | Stable |
-| Outlook support | Coming soon |
+| Outlook support | Available for source builds; not configured in the first public package |
 | Unified multi-account inbox | Stable |
 | Split inbox with custom tabs | Stable |
 | Command palette (<kbd>Cmd</kbd>+<kbd>K</kbd>) | Stable |
@@ -37,13 +37,13 @@ It is also yours. The code is open source, the architecture is modular, and the 
 | Thread view & conversation grouping | Stable |
 | Compose (inline, floating, fullscreen) | Stable |
 | Archive, star, snooze, read/unread | Stable |
-| Labels & label management | Stable |
-| Search with full query syntax | Stable |
-| Multi-select & bulk actions | Stable |
-| Focus & split layout modes | Stable |
-| Undo actions | Stable |
-| Remote image privacy proxy | Stable |
-| Auto-updates via Sparkle | Stable |
+| Labels & label management | Planned |
+| Search | Beta |
+| Multi-select & bulk actions | Planned |
+| Focus & split layout modes | Beta |
+| Undo actions | Planned |
+| Attachments and rich compose | Planned |
+| Auto-updates | Planned; v1 uses manual downloads |
 
 ## Keyboard Shortcuts
 
@@ -67,48 +67,51 @@ Download the latest macOS release:
 
 [Download Inbox Zero for macOS](../../releases/latest)
 
-On the release page, download `Inbox-Zero-*.zip`, unzip it, and move
-`Inbox Zero.app` to your Applications folder.
+On the release page, download `Inbox-Zero-Native-*.dmg` and drag
+`Inbox Zero Mail.app` to your Applications folder.
 
-Requires macOS 14+ on Apple Silicon.
+The first Native SDK release targets Apple Silicon macOS. Windows packaging is
+available for source builds and will follow as a public installer.
 
 ### Build from Source
 
-Requires macOS with Xcode 26+.
+Requires Node.js 24, Docker, and the native platform build dependencies.
 
 ```bash
 git clone https://github.com/inbox-zero/inbox-zero-mail.git
 cd inbox-zero-mail
-./tools/dev/run-local.sh
+./NativeApp/scripts/run-demo.sh
 ```
 
-That's it. The script starts a local email emulator, builds the app, and opens it. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development setup, OAuth configuration, and more.
+That script starts a local email emulator, builds the app, and opens it with
+demo mail. To reuse the Google OAuth settings configured for the Swift client,
+create `Config/LocalSecrets.xcconfig` and run:
+
+```bash
+./NativeApp/scripts/run-real.sh
+```
+
+See [NativeApp/README.md](NativeApp/README.md) for packaging, OAuth, testing,
+and provider details.
 
 ## Privacy
 
-Inbox Zero Mail talks directly to the Gmail (and soon Microsoft) APIs. Your mail does not pass through any Inbox Zero servers.
-
-The one exception is remote images. By default, image requests are routed through `img.getinboxzero.com` so that senders can't learn your IP or other client details just from you opening their email. You have three options:
-
-- **Use the default proxy** (recommended for most users) -- zero setup.
-- **Use your own proxy** -- enter your proxy URL in Settings > General > Privacy. The proxy is open source and runs for free on Cloudflare Workers; see the [main Inbox Zero repo](https://getinboxzero.com/github) to host one.
-- **Turn it off** -- disable remote images in Settings.
-
-Developers can set `INBOX_ZERO_IMAGE_PROXY_BASE_URL` to configure the default proxy URL for local or custom builds, or set it to `off` to disable proxying in that build.
+Inbox Zero Mail talks directly to Gmail and Microsoft Graph. OAuth tokens are
+stored in the operating system credential store and do not enter the UI model
+or automation effect journal. Debug and automation recordings can contain mail
+content and should never be published from real accounts.
 
 ## Architecture
 
-Inbox Zero Mail is built as a modular Swift package architecture:
+The release client lives in `NativeApp/`:
 
 ```
-InboxZeroMail (app)
- +-- MailFeatures    -- UI, window management, state
- +-- MailCore        -- shared models & protocols
- +-- MailData        -- local persistence (GRDB/SQLite)
- +-- ProviderGmail   -- Gmail API integration
- +-- ProviderOutlook -- Outlook/Microsoft Graph (WIP)
- +-- ProviderCore    -- shared provider abstractions
- +-- AppUpdates      -- Sparkle auto-update integration
+NativeApp
+ +-- src/app.native   -- declarative native UI
+ +-- src/main.zig     -- app update loop and window coordination
+ +-- src/model.zig    -- shared multi-window mail store
+ +-- src/providers/   -- Gmail and Microsoft Graph behavior
+ +-- src/platform/    -- OAuth, credential storage, and trusted I/O
 ```
 
 ## Contributing

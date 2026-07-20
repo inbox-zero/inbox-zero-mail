@@ -37,6 +37,9 @@
         <button size="sm" variant="ghost" selected="{isSnoozedView}" on-press="show_snoozed">Snoozed  {snoozedCount}</button>
         <button size="sm" variant="ghost" selected="{isNotificationsView}" on-press="show_notifications">Notifications  {notificationCount}</button>
       </tabs>
+      <if test="{demo_mode}">
+        <badge variant="secondary">Demo</badge>
+      </if>
       <if test="{loading}">
         <spinner width="18" height="18" label="Synchronizing mail" />
       </if>
@@ -132,10 +135,19 @@
             <button size="sm" variant="ghost" icon="x" label="Close" on-press="toggle_drawer"></button>
           </row>
         <text><span weight="bold">Accounts</span></text>
-        <text size="sm" foreground="text_muted" wrap="true">Switch mailboxes below, or connect another Gmail or Outlook account. Demo accounts are added automatically in emulator mode.</text>
+        <if test="{demo_mode}">
+          <text size="sm" foreground="text_muted" wrap="true">Demo accounts are provided by the local mail emulator.</text>
+        </if>
+        <else>
+          <text size="sm" foreground="text_muted" wrap="true">Switch mailboxes below or connect another account.</text>
+        </else>
         <row gap="8">
-          <button size="sm" variant="outline" grow="1" on-press="connect_gmail" disabled="{oauth_busy}">Connect Gmail</button>
-          <button size="sm" variant="outline" grow="1" on-press="connect_outlook" disabled="{oauth_busy}">Connect Outlook</button>
+          <if test="{gmail_available}">
+            <button size="sm" variant="outline" grow="1" on-press="connect_gmail" disabled="{oauth_busy}">Connect Gmail</button>
+          </if>
+          <if test="{outlook_available}">
+            <button size="sm" variant="outline" grow="1" on-press="connect_outlook" disabled="{oauth_busy}">Connect Outlook</button>
+          </if>
         </row>
         <if test="{authorizationInProgress}">
           <button size="sm" variant="ghost" on-press="cancel_oauth">Cancel authorization</button>

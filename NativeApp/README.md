@@ -55,15 +55,12 @@ The first CLI run installs the checksum-verified Zig 0.16.0 toolchain under
 From the repository root:
 
 ```sh
-docker compose up -d emulate
-cd NativeApp
-INBOX_ZERO_EMULATE=1 npx --yes @native-sdk/cli@0.5.3 dev . --yes -Dautomation=true
+./NativeApp/scripts/run-demo.sh -Dautomation=true
 ```
 
-Run the CLI from `NativeApp`: Native SDK's automation IPC directory is resolved
-from the current working directory. `INBOX_ZERO_EMULATE=1` is intentionally
-explicit because production launches begin with no seeded identities. The
-development tokens in the seed are only for the local emulator.
+The launcher starts Emulate, sets `INBOX_ZERO_EMULATE=1`, and runs the CLI from
+`NativeApp`. The development tokens in the seed are only for the local
+emulator. A **Demo** badge in the toolbar makes the active mode explicit.
 
 ## Static checks and tests
 
@@ -79,30 +76,44 @@ executable.
 
 ## Production OAuth
 
-The shipping app starts without accounts. Configure desktop/native OAuth
-clients in the launch environment, then use the **Gmail** or **Outlook** button
-in the account sidebar:
+The shipping app starts without accounts. The quickest source-development path
+reuses `Config/LocalSecrets.xcconfig`, which is also used by the Swift client:
+
+```sh
+./NativeApp/scripts/run-real.sh
+```
+
+Environment values override both that local file and packaged configuration:
 
 ```sh
 INBOX_ZERO_GMAIL_CLIENT_ID=your-desktop-client-id.apps.googleusercontent.com \
-INBOX_ZERO_GMAIL_CLIENT_SECRET=optional-installed-app-secret \
+INBOX_ZERO_GMAIL_CLIENT_SECRET=your-installed-app-secret \
 INBOX_ZERO_OUTLOOK_CLIENT_ID=your-entra-public-client-id \
-npx --yes @native-sdk/cli@0.5.3 dev . --yes
+./NativeApp/scripts/run-real.sh
 ```
+
+`scripts/write-oauth-config.mjs` writes the ignored `assets/oauth.json` used by
+normal app launches and release packages. The release workflow generates that
+file from GitHub Actions secrets, so a downloaded app does not depend on shell
+environment variables. The Google values are installed/desktop OAuth
+credentials: the client secret is included because Google's token exchange
+accepts it for this client type, but it must not be treated as confidential
+because users can extract any value shipped in a desktop application.
+
+Outlook is optional. When no Outlook client ID is configured, the production UI
+hides **Connect Outlook**; source builders can enable it with
+`INBOX_ZERO_OUTLOOK_CLIENT_ID`. Emulator mode still exposes both providers.
 
 Google and Microsoft authorization opens in the system browser and returns to
 an IPv4 loopback callback using authorization code + PKCE S256 with validated
 state. In Google Cloud, enable the Gmail API, configure the OAuth consent
 screen and requested Gmail scopes, and create a **Desktop app** OAuth client.
 Microsoft is always treated as a native public client in production, so no
-Outlook client secret is accepted. Configure the Entra application as a
+Outlook client secret is required. Configure the Entra application as a
 **Mobile and desktop application**, enable public client flows, and register
 `http://localhost/oauth/microsoft`; the app supplies an ephemeral port, which
 Entra ignores for `localhost` loopback redirects. Grant delegated `User.Read`,
-`Mail.ReadWrite`, and `Mail.Send` permissions. A packaged launch must provide
-the client IDs in its launcher environment or deployment configuration; they
-are not secrets, but an ordinary Start-menu launch cannot inherit values that
-were set only in a developer terminal.
+`Mail.ReadWrite`, and `Mail.Send` permissions.
 
 Refresh tokens and the nonsecret account registry are stored through the OS
 credential service (Windows Credential Manager, macOS Keychain, or Linux
@@ -118,6 +129,25 @@ Microsoft. Revoke provider consent separately when that is desired.
 Debug/automation effect recordings can contain mail request and response
 content even though they exclude OAuth secrets. Treat those artifacts like
 mailbox data and do not publish them from real accounts.
+
+## Package and release macOS
+
+For a local ad-hoc signed package using `Config/LocalSecrets.xcconfig`:
+
+```sh
+./NativeApp/scripts/package-macos.sh
+```
+
+Set `INBOX_ZERO_SIGNING_MODE=identity` and
+`INBOX_ZERO_CODESIGN_IDENTITY="Developer ID Application: ..."` to use a local
+Developer ID identity. Public releases are handled by
+`.github/workflows/release-native.yml`: push a tag matching the manifest version
+such as `native-v0.1.0`, or run the workflow manually against an existing tag.
+It reuses the existing Google OAuth, Developer ID, and Apple notarization
+secrets, then publishes a signed, notarized, stapled DMG to GitHub Releases.
+
+The release currently uses manual downloads; the Native SDK client does not yet
+include the legacy Swift client's Sparkle updater.
 
 ## Live emulator contract test
 

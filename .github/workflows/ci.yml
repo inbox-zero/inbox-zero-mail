@@ -51,6 +51,34 @@ jobs:
         shell: bash
         run: ./scripts/windows-wine-smoke.sh
 
+  native-macos-package:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: NativeApp
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+
+      - name: Build release-shaped binary
+        shell: bash
+        run: npx --yes @native-sdk/cli@0.5.3 build . --yes
+
+      - name: Package and verify ad-hoc macOS app
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes @native-sdk/cli@0.5.3 package \
+            --target macos \
+            --output "zig-out/package/Inbox Zero Mail.app" \
+            --binary zig-out/bin/inbox-zero-mail-native \
+            --assets assets \
+            --signing adhoc
+          codesign --verify --deep --strict --verbose=2 "zig-out/package/Inbox Zero Mail.app"
+
   package-tests:
     runs-on: macos-15
     steps:

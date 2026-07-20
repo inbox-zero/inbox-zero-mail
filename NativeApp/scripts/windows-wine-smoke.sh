@@ -52,22 +52,30 @@ run_native automate wait --timeout-ms 180000 >/dev/null || fail "app did not pub
 run_native automate assert --timeout-ms 60000 \
   'gpu_backend=software' \
   'gpu_nonblank=true' \
-  'Combined inbox' \
-  'All accounts' || fail "Win32 canvas did not render"
+  'Mailbox views' \
+  'Open navigation' || fail "Win32 canvas did not render"
 
 snapshot="${AUTOMATION_DIR}/snapshot.txt"
-archive_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=button name="archive".*/\1/p' "${snapshot}" | head -1)"
+navigation_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=button name="Open navigation".*/\1/p' "${snapshot}" | head -1)"
+[[ -n "${navigation_id}" ]] || fail "navigation action was not published"
+run_native automate widget-action mail-canvas "${navigation_id}" press >/dev/null
+run_native automate assert --timeout-ms 5000 'Combined inbox' 'All accounts' >/dev/null \
+  || fail "navigation drawer did not open"
+
+archive_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=button name="Archive".*/\1/p' "${snapshot}" | head -1)"
 alpha_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=listitem name="Alpha Inbox".*/\1/p' "${snapshot}" | head -1)"
 [[ -n "${archive_id}" && -n "${alpha_id}" ]] || fail "interactive widgets were not published"
 
 run_native automate widget-action mail-canvas "${archive_id}" press >/dev/null
-run_native automate assert --timeout-ms 5000 'role=button name="archive".*selected' >/dev/null \
+run_native automate widget-action mail-canvas "${navigation_id}" press >/dev/null
+run_native automate assert --timeout-ms 5000 'role=button name="Archive".*selected' >/dev/null \
   || fail "filter action did not update state"
 run_native automate widget-click mail-canvas "${alpha_id}" >/dev/null
+run_native automate widget-action mail-canvas "${navigation_id}" press >/dev/null
 run_native automate assert --timeout-ms 5000 'role=listitem name="Alpha Inbox".*selected' >/dev/null \
   || fail "account click did not update state"
 run_native automate widget-key mail-canvas d >/dev/null
-run_native automate assert --timeout-ms 5000 'Saved drafts' 'saved drafts' >/dev/null \
+run_native automate assert --timeout-ms 5000 'role=group name="Drafts"' 'No saved drafts.' >/dev/null \
   || fail "draft keyboard shortcut did not open the saved-drafts view"
 run_native automate widget-key mail-canvas / >/dev/null
 run_native automate assert --timeout-ms 5000 'role=textbox name="Search mail".*focused=true' >/dev/null \
@@ -78,11 +86,11 @@ compose_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=button name="Compose".*/\1/p' "$
 run_native automate widget-click mail-canvas "${compose_id}" >/dev/null
 run_native automate assert --timeout-ms 5000 \
   'window @w[0-9]+ "Compose"' \
-  'role=textbox name="To"' \
+  'role=textbox name="To recipients, separated by commas"' \
   'role=textbox name="Subject"' \
   'role=textbox name="Message body"' >/dev/null || fail "compose window did not open"
 
-to_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=textbox name="To".*/\1/p' "${snapshot}" | head -1)"
+to_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=textbox name="To recipients, separated by commas".*/\1/p' "${snapshot}" | head -1)"
 subject_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=textbox name="Subject".*/\1/p' "${snapshot}" | head -1)"
 body_id="$(sed -n 's/.*#\([0-9][0-9]*\) role=textbox name="Message body".*/\1/p' "${snapshot}" | head -1)"
 [[ -n "${to_id}" && -n "${subject_id}" && -n "${body_id}" ]] || fail "compose fields were not published"
