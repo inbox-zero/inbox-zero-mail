@@ -1,0 +1,217 @@
+<stack background="background">
+  <if test="{reading_open}">
+    <column grow="1" background="background">
+      <row height="60" padding="12" gap="8" cross="center" background="surface" window-drag="true" label="Message toolbar">
+        <button size="sm" variant="ghost" icon="chevron-left" label="Back to inbox" on-press="close_reading"></button>
+        <text grow="1" overflow="ellipsis">{selectedSubject}</text>
+        <button size="sm" variant="ghost" on-press="compose_reply">Reply</button>
+        <button size="sm" variant="ghost" on-press="archive_selected">Archive</button>
+        <button size="sm" variant="ghost" on-press="toggle_star_selected">{selectedStarLabel}</button>
+        <button size="sm" variant="ghost" icon="external-link" label="Open in new window" on-press="open_selected_window"></button>
+      </row>
+      <separator />
+      <scroll grow="1" label="Message">
+        <row padding="32" main="center">
+          <column width="860" gap="20">
+            <text size="heading" wrap="true">{selectedSubject}</text>
+            <column gap="4">
+              <text>{selectedSender}</text>
+              <text size="sm" foreground="text_muted">{selectedAccountLabel}</text>
+            </column>
+            <separator />
+            <text wrap="true">{selectedBody}</text>
+          </column>
+        </row>
+      </scroll>
+      <status-bar>Escape: back to inbox   |   R: reply   |   E: archive   |   S: star</status-bar>
+    </column>
+  </if>
+  <else>
+  <column background="background">
+    <row height="60" padding="12" gap="8" cross="center" background="surface" window-drag="true" label="Mail toolbar">
+      <button size="sm" variant="ghost" icon="menu" label="Open navigation" on-press="toggle_drawer"></button>
+      <tabs gap="6" grow="1" label="Mailbox views">
+        <button size="sm" variant="ghost" selected="{isAllView}" on-press="show_all">All  {allCount}</button>
+        <button size="sm" variant="ghost" selected="{isUnreadView}" on-press="show_unread">Unread  {unreadCount}</button>
+        <button size="sm" variant="ghost" selected="{isStarredView}" on-press="show_starred">Starred  {starredCount}</button>
+        <button size="sm" variant="ghost" selected="{isSnoozedView}" on-press="show_snoozed">Snoozed  {snoozedCount}</button>
+        <button size="sm" variant="ghost" selected="{isNotificationsView}" on-press="show_notifications">Notifications  {notificationCount}</button>
+      </tabs>
+      <if test="{demo_mode}">
+        <badge variant="secondary">Demo</badge>
+      </if>
+      <if test="{loading}">
+        <spinner width="18" height="18" label="Synchronizing mail" />
+      </if>
+      <else>
+        <button size="sm" variant="ghost" icon="refresh-cw" label="Refresh" on-press="refresh"></button>
+      </else>
+      <button size="sm" variant="ghost" icon="edit" label="Compose" on-press="compose_new"></button>
+      <button size="sm" variant="ghost" icon="search" label="Search" on-press="toggle_search"></button>
+      <button size="sm" variant="ghost" icon="terminal" label="Command palette" on-press="toggle_command_palette"></button>
+    </row>
+
+    <if test="{search_visible}">
+      <row padding="12" main="center" background="surface">
+        <search-field width="560" text="{search}" placeholder="Search messages or drafts" label="Search mail" on-input="search_edit" autofocus="{search_requested}" />
+      </row>
+      <separator />
+    </if>
+
+    <if test="{isDraftsView}">
+      <column grow="1" padding="24" gap="14" label="Draft list">
+        <row cross="center">
+          <text size="heading" grow="1">Drafts</text>
+          <button size="sm" variant="primary" icon="edit" on-press="compose_new">Compose</button>
+        </row>
+        <scroll grow="1" label="Drafts">
+          <column gap="4">
+            <for each="draftsView" key="id" as="d">
+              <panel on-press="open_draft:{d.id}" selected="{d.selected}" role="listitem" label="{d.accessible}">
+                <row height="56" padding="10" gap="12" cross="center">
+                  <icon name="edit" width="16" height="16" label="Draft" />
+                  <text width="260" overflow="ellipsis">{d.subject}</text>
+                  <text grow="1" size="sm" foreground="text_muted" overflow="ellipsis">To: {d.recipients}</text>
+                  <badge variant="secondary">{d.account}</badge>
+                </row>
+              </panel>
+            </for>
+            <else>
+              <column padding="48" gap="10" cross="center">
+                <icon name="edit" width="28" height="28" label="No drafts" />
+                <text>No saved drafts.</text>
+                <button size="sm" variant="outline" on-press="compose_new">Compose email</button>
+              </column>
+            </else>
+          </column>
+        </scroll>
+      </column>
+    </if>
+    <else>
+      <scroll grow="1" label="Messages">
+        <column padding="16" gap="0">
+          <text size="sm" foreground="text_muted">Today</text>
+          <spacer height="6" />
+          <for each="visibleThreads" key="index" as="t">
+            <list-item height="48" padding="4" gap="10" cross="center" on-press="activate_thread:{t.index}" on-submit="activate_thread:{t.index}" selected="{t.selected}" autofocus="{t.selected}" label="{t.accessible}">
+              <if test="{t.unread}">
+                <icon name="app:unread-dot" width="8" height="8" foreground="info" label="Unread" />
+              </if>
+              <else><spacer width="8" /></else>
+              <if test="{t.starred}">
+                <icon name="app:star-filled" width="16" height="16" foreground="warning" label="Starred" />
+              </if>
+              <else><icon name="app:star" width="16" height="16" foreground="text_muted" label="Not starred" /></else>
+              <text width="180" overflow="ellipsis">{t.sender}</text>
+              <row width="104" cross="center">
+                <if test="{t.has_category}"><badge variant="secondary">{t.category}</badge></if>
+              </row>
+              <text width="280" overflow="ellipsis">{t.subject}</text>
+              <text foreground="text_muted">—</text>
+              <text grow="1" foreground="text_muted" overflow="ellipsis">{t.snippet}</text>
+              <if test="{t.has_attachments}"><icon name="app:paperclip" width="16" height="16" foreground="text_muted" label="Has attachment" /></if>
+              <text width="44" text-alignment="end" foreground="text_muted">{t.received}</text>
+            </list-item>
+          </for>
+          <else>
+            <column padding="64" gap="10" cross="center">
+              <icon name="file-text" width="28" height="28" label="Empty inbox" />
+              <text>No messages match this view.</text>
+              <text size="sm" foreground="text_muted">Try another account, view, or search.</text>
+            </column>
+          </else>
+        </column>
+      </scroll>
+    </else>
+  </column>
+  </else>
+
+  <if test="{drawer_open}">
+    <column grow="1" main="center" cross="center">
+      <dialog label="Mailboxes and folders" width="540" height="520" on-dismiss="toggle_drawer">
+        <column padding="20" gap="12">
+          <row cross="center">
+            <text size="heading" grow="1">Mailboxes and folders</text>
+            <button size="sm" variant="ghost" icon="x" label="Close" on-press="toggle_drawer"></button>
+          </row>
+        <text><span weight="bold">Accounts</span></text>
+        <if test="{demo_mode}">
+          <text size="sm" foreground="text_muted" wrap="true">Demo accounts are provided by the local mail emulator.</text>
+        </if>
+        <else>
+          <text size="sm" foreground="text_muted" wrap="true">Switch mailboxes below or connect another account.</text>
+        </else>
+        <row gap="8">
+          <if test="{gmail_available}">
+            <button size="sm" variant="outline" grow="1" on-press="connect_gmail" disabled="{oauth_busy}">Connect Gmail</button>
+          </if>
+          <if test="{outlook_available}">
+            <button size="sm" variant="outline" grow="1" on-press="connect_outlook" disabled="{oauth_busy}">Connect Outlook</button>
+          </if>
+        </row>
+        <if test="{authorizationInProgress}">
+          <button size="sm" variant="ghost" on-press="cancel_oauth">Cancel authorization</button>
+        </if>
+        <column gap="4">
+          <for each="accountsView" key="index" as="a">
+            <panel on-press="select_account:{a.index}" selected="{a.selected}" role="listitem" label="{a.title}">
+              <row padding="8" gap="8" cross="center">
+                <column grow="1" gap="2">
+                  <text>{a.title}</text>
+                  <text size="sm" foreground="text_muted">{a.email}</text>
+                </column>
+                <badge variant="secondary">{a.unread_count}</badge>
+                <button size="sm" variant="ghost" icon="external-link" label="Open {a.title} in a new window" on-press="open_inbox_window:{a.index}"></button>
+              </row>
+            </panel>
+          </for>
+        </column>
+        <separator />
+        <text><span weight="bold">More views</span></text>
+        <row gap="8">
+          <button size="sm" variant="ghost" selected="{isArchiveView}" on-press="show_archive">Archive</button>
+          <button size="sm" variant="ghost" selected="{isTrashView}" on-press="show_trash">Trash</button>
+          <button size="sm" variant="ghost" selected="{isDraftsView}" on-press="show_drafts">Drafts</button>
+        </row>
+        <if test="{authorizationInProgress}">
+          <text size="sm" foreground="text_muted">{statusMessage}</text>
+        </if>
+        <if test="{canDisconnect}">
+          <button size="sm" variant="ghost" on-press="disconnect_selected">Disconnect selected account</button>
+        </if>
+        </column>
+      </dialog>
+    </column>
+  </if>
+
+  <if test="{command_palette_open}">
+    <column grow="1" main="center" cross="center">
+      <dialog label="Command palette" width="600" height="680" on-dismiss="toggle_command_palette">
+        <column padding="16" gap="10">
+          <row cross="center">
+            <column grow="1" gap="2">
+              <text size="heading">Command palette</text>
+              <text size="sm" foreground="text_muted">Up/Down to navigate · Enter to open · Esc to close</text>
+            </column>
+            <button size="sm" variant="ghost" icon="x" label="Close" on-press="toggle_command_palette"></button>
+          </row>
+          <separator />
+          <scroll grow="1" label="Commands">
+            <column gap="0" label="Command results">
+              <for each="paletteCommands" key="id" as="c">
+                <list-item height="44" padding="4" gap="10" cross="center" selected="{c.selected}" autofocus="{c.selected}" on-press="run_palette_command:{c.id}" on-submit="activate_context" label="{c.title}">
+                  <icon name="{c.icon}" width="17" height="17" foreground="text_muted" label="{c.title}" />
+                  <column grow="1" gap="1">
+                    <text>{c.title}</text>
+                    <text size="sm" foreground="text_muted" overflow="ellipsis">{c.detail}</text>
+                  </column>
+                  <text size="sm" foreground="text_muted">{c.shortcut}</text>
+                </list-item>
+              </for>
+            </column>
+          </scroll>
+        </column>
+      </dialog>
+    </column>
+  </if>
+</stack>

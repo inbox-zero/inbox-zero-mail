@@ -11,6 +11,74 @@ permissions:
   contents: read
 
 jobs:
+  native-sdk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: NativeApp
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+
+      - name: Run Native SDK tests
+        shell: bash
+        run: npx --yes @native-sdk/cli@0.5.3 test . --yes
+
+      - name: Validate Native markup and model bindings
+        shell: bash
+        run: npx --yes @native-sdk/cli@0.5.3 check . --strict
+
+      - name: Cross-build Windows client
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes @native-sdk/cli@0.5.3 build . --yes \
+            -Dtarget=x86_64-windows-gnu \
+            -Dplatform=windows \
+            -Dautomation=true
+          test -s zig-out/bin/inbox-zero-mail-native.exe
+
+      - name: Install Windows smoke dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wine xvfb xauth
+
+      - name: Run Win32 client under Wine
+        shell: bash
+        run: ./scripts/windows-wine-smoke.sh
+
+  native-macos-package:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: NativeApp
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+
+      - name: Build release-shaped binary
+        shell: bash
+        run: npx --yes @native-sdk/cli@0.5.3 build . --yes
+
+      - name: Package and verify ad-hoc macOS app
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes @native-sdk/cli@0.5.3 package \
+            --target macos \
+            --output "zig-out/package/Inbox Zero Mail.app" \
+            --binary zig-out/bin/inbox-zero-mail-native \
+            --assets assets \
+            --signing adhoc
+          codesign --verify --deep --strict --verbose=2 "zig-out/package/Inbox Zero Mail.app"
+
   package-tests:
     runs-on: macos-15
     steps:
@@ -42,7 +110,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx --yes @inbox-zero/emulate@0.4.5 start --port 4402 --service google,microsoft --seed tools/emulator/dev-seed.yaml > /tmp/emulate.log 2>&1 &
+          npx --yes @inbox-zero/emulate@0.5.0 start --port 4402 --service google,microsoft --seed tools/emulator/dev-seed.yaml > /tmp/emulate.log 2>&1 &
           for attempt in {1..30}; do
             if curl -sf "http://localhost:4402/o/oauth2/v2/auth?client_id=inbox-zero-mail-dev&redirect_uri=http://localhost:4402/oauth/google&response_type=code&scope=openid%20email" > /dev/null; then
               exit 0
@@ -71,6 +139,14 @@ jobs:
           set -euo pipefail
           cd Packages/ProviderOutlook
           swift test
+
+      - name: Run Native provider emulator E2E
+        shell: bash
+        run: NativeApp/scripts/emulator-e2e.sh
+
+      - name: Run Native OAuth coordinator against emulator
+        shell: bash
+        run: NativeApp/scripts/oauth-coordinator-emulator.sh
 
   app-tests:
     runs-on: macos-26

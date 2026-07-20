@@ -28,6 +28,43 @@ func liveAuthorizationRequiresAConfiguredClientID() async throws {
 }
 
 @Test
+func defaultOAuthScopesCoverOfflineMailReadWriteAndSend() {
+    let configuration = OutlookProviderConfiguration.production(
+        clientID: "public-desktop-client",
+        redirectURL: URL(string: "http://localhost")!
+    )
+
+    #expect(configuration.scopes.contains("offline_access"))
+    #expect(configuration.scopes.contains("Mail.ReadWrite"))
+    #expect(configuration.scopes.contains("Mail.Send"))
+}
+
+@Test
+func refreshSecretsAreUsedOnlyForTheConfiguredEnvironment() {
+    let emulatorBaseURL = URL(string: "http://127.0.0.1:4403")!
+    let emulator = OutlookProviderConfiguration(
+        environment: .emulator(apiBaseURL: emulatorBaseURL, authBaseURL: emulatorBaseURL),
+        clientID: "emulator-client",
+        emulatorClientSecret: "emulator-secret",
+        redirectURL: emulatorBaseURL.appending(path: "oauth/microsoft")
+    )
+    #expect(emulator.resolvedRefreshClientSecret() == "emulator-secret")
+
+    let publicClient = OutlookProviderConfiguration.production(
+        clientID: "public-client",
+        redirectURL: URL(string: "http://127.0.0.1")!
+    )
+    #expect(publicClient.resolvedRefreshClientSecret() == nil)
+
+    let confidentialClient = OutlookProviderConfiguration.production(
+        clientID: "confidential-client",
+        clientSecret: "production-secret",
+        redirectURL: URL(string: "http://127.0.0.1")!
+    )
+    #expect(confidentialClient.resolvedRefreshClientSecret() == "production-secret")
+}
+
+@Test
 func foldersAndCategoriesMapToDistinctMailboxKinds() {
     let accountID = MailAccountID(rawValue: "microsoft:primary@outlook.com")
     let folder = OutlookFolder(id: "inbox", displayName: "Inbox", wellKnownName: "inbox").asMailbox(accountID: accountID)
@@ -121,7 +158,7 @@ private func microsoftSession(baseURL: URL, redirectURL: URL, email: String) asy
     authRequest.httpBody = formEncodedBody([
         "email": email,
         "redirect_uri": redirectURL.absoluteString,
-        "scope": "openid offline_access Mail.ReadWrite",
+        "scope": "openid offline_access Mail.ReadWrite Mail.Send",
         "client_id": "inbox-zero-mail-dev",
         "response_mode": "query",
         "state": "",

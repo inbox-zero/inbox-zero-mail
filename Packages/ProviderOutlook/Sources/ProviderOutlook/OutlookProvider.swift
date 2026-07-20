@@ -71,6 +71,7 @@ public struct OutlookProviderConfiguration: Sendable {
             "offline_access",
             "User.Read",
             "Mail.ReadWrite",
+            "Mail.Send",
         ],
         emulatorAccounts: [String] = [],
         emulatorAutoEmail: String? = nil,
@@ -181,11 +182,9 @@ public final class OutlookProvider: NSObject, @unchecked Sendable, MailProvider 
     }
 
     public func restoreSession(_ session: ProviderSession) async throws -> ProviderSession {
-        guard session.accessToken.isEmpty == false else {
-            throw MailProviderError.unauthorized
-        }
-
-        if let expirationDate = session.expirationDate, expirationDate > Date().addingTimeInterval(60) {
+        if session.accessToken.isEmpty == false,
+           let expirationDate = session.expirationDate,
+           expirationDate > Date().addingTimeInterval(60) {
             return session
         }
 
@@ -402,7 +401,7 @@ private extension OutlookProvider {
             "refresh_token": refreshToken,
             "client_id": configuration.clientID,
         ]
-        if let clientSecret = configuration.clientSecret, clientSecret.isEmpty == false {
+        if let clientSecret = configuration.resolvedRefreshClientSecret() {
             params["client_secret"] = clientSecret
         }
         request.httpBody = formURLEncodedBody(params)
@@ -619,5 +618,13 @@ private extension OutlookProvider {
 
     func escapedODataString(_ value: String) -> String {
         value.replacingOccurrences(of: "'", with: "''")
+    }
+}
+
+extension OutlookProviderConfiguration {
+    func resolvedRefreshClientSecret() -> String? {
+        let secret = environment.kind == .emulator ? emulatorClientSecret : clientSecret
+        guard let secret, secret.isEmpty == false else { return nil }
+        return secret
     }
 }

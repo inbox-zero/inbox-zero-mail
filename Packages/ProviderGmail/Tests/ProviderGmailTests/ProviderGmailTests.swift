@@ -51,6 +51,80 @@ func liveAuthorizationRequiresAConfiguredClientID() async throws {
 }
 
 @Test
+func productionAndEmulatorTokenEndpointsAreProviderCorrect() throws {
+    let production = GmailProviderConfiguration.production(
+        clientID: "desktop-client.apps.googleusercontent.com",
+        redirectURL: URL(string: "http://127.0.0.1")!
+    )
+    #expect(try production.resolvedTokenEndpointURL().absoluteString == "https://oauth2.googleapis.com/token")
+
+    let emulatorBaseURL = URL(string: "http://127.0.0.1:4402")!
+    let emulator = GmailProviderConfiguration(
+        environment: .emulator(apiBaseURL: emulatorBaseURL, authBaseURL: emulatorBaseURL),
+        clientID: "inbox-zero-mail-dev",
+        redirectURL: emulatorBaseURL.appending(path: "oauth/google")
+    )
+    #expect(try emulator.resolvedTokenEndpointURL().absoluteString == "http://127.0.0.1:4402/oauth2/token")
+    #expect(emulator.resolvedRefreshClientSecret() == "inbox-zero-google-secret")
+    #expect(production.resolvedRefreshClientSecret() == nil)
+
+    let confidentialProduction = GmailProviderConfiguration.production(
+        clientID: "desktop-client.apps.googleusercontent.com",
+        clientSecret: "production-secret",
+        redirectURL: URL(string: "http://127.0.0.1")!
+    )
+    #expect(confidentialProduction.resolvedRefreshClientSecret() == "production-secret")
+}
+
+@Test
+func emulatorRefreshUsesForkEndpointAndClientSecret() async throws {
+    let testHost = "oauth-refresh.example.test"
+    let baseURL = URL(string: "https://\(testHost)")!
+    let sessionConfiguration = URLSessionConfiguration.ephemeral
+    sessionConfiguration.protocolClasses = [MockGmailURLProtocol.self]
+    let urlSession = URLSession(configuration: sessionConfiguration)
+    let providerConfiguration = GmailProviderConfiguration(
+        environment: .emulator(apiBaseURL: baseURL, authBaseURL: baseURL),
+        clientID: "emulator-client",
+        emulatorClientSecret: "emulator-secret",
+        redirectURL: baseURL.appending(path: "oauth/google")
+    )
+    let provider = GmailProvider(
+        configuration: providerConfiguration,
+        httpClient: HTTPClient(session: urlSession)
+    )
+
+    await MockGmailURLProtocol.reset(host: testHost)
+    await MockGmailURLProtocol.setHandler(host: testHost) { request in
+        let url = try #require(request.url)
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        guard url.path == "/oauth2/token" else {
+            Issue.record("Unexpected refresh request: \(url.absoluteString)")
+            return (response, Data())
+        }
+        return (response, #"{"access_token":"refreshed-access-token","refresh_token":"rotated-refresh-token","expires_in":3600}"#.data(using: .utf8)!)
+    }
+
+    let expired = ProviderSession(
+        providerKind: .gmail,
+        providerAccountID: "account-1",
+        emailAddress: "refresh@example.com",
+        displayName: "Refresh Tester",
+        accessToken: "",
+        refreshToken: "refresh-token",
+        expirationDate: Date(timeIntervalSince1970: 0)
+    )
+    let refreshed = try await provider.restoreSession(expired)
+
+    #expect(refreshed.accessToken == "refreshed-access-token")
+    #expect(refreshed.refreshToken == "rotated-refresh-token")
+    #expect(refreshed.expirationDate.map { $0 > Date() } == true)
+    #expect(await MockGmailURLProtocol.requestCount(host: testHost, path: "/oauth2/token") == 1)
+    #expect(await MockGmailURLProtocol.requestCount(host: testHost, path: "/o/oauth2/token") == 0)
+    #expect(providerConfiguration.resolvedRefreshClientSecret() == "emulator-secret")
+}
+
+@Test
 func gmailEmulatorContractCoversSyncMutationsAndSend() async throws {
     guard emulatorTestsEnabled else { return }
 
@@ -68,7 +142,10 @@ func gmailEmulatorContractCoversSyncMutationsAndSend() async throws {
         )
     )
 
-    let session = try await googleSession(baseURL: baseURL, redirectURL: redirectURL, email: "alpha.inbox@example.com")
+    let authorizedSession = try await googleSession(baseURL: baseURL, redirectURL: redirectURL, email: "alpha.inbox@example.com")
+    let session = try await provider.restoreSession(authorizedSession)
+    #expect(session.accessToken.isEmpty == false)
+    #expect(session.refreshToken == authorizedSession.refreshToken)
     let accountID = MailAccountID(rawValue: "gmail:alpha.inbox@example.com")
 
     let mailboxes = try await provider.listMailboxes(session: session, accountID: accountID)

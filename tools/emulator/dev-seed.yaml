@@ -1,3 +1,31 @@
+tokens:
+  inbox_zero_native_alpha:
+    login: alpha.inbox@example.com
+    scopes:
+      - openid
+      - email
+      - profile
+      - https://www.googleapis.com/auth/gmail.modify
+      - https://www.googleapis.com/auth/gmail.send
+  inbox_zero_native_beta:
+    login: beta.inbox@example.com
+    scopes:
+      - openid
+      - email
+      - profile
+      - https://www.googleapis.com/auth/gmail.modify
+      - https://www.googleapis.com/auth/gmail.send
+  inbox_zero_native_gamma:
+    login: gamma.outlook@example.com
+    scopes:
+      - openid
+      - email
+      - profile
+      - offline_access
+      - User.Read
+      - Mail.ReadWrite
+      - Mail.Send
+
 google:
   users:
     - email: alpha.inbox@example.com
@@ -220,6 +248,8 @@ microsoft:
         - inboxzeromail://oauth/microsoft
         - http://localhost:4001/oauth/microsoft
         - http://localhost:4003/oauth/microsoft
+        - http://127.0.0.1:4001/oauth/microsoft
+        - http://127.0.0.1:4003/oauth/microsoft
         - http://localhost:4403/oauth/microsoft
         - http://127.0.0.1/oauth/microsoft
   categories:

@@ -5,7 +5,7 @@ services:
     command:
       - bash
       - -lc
-      - npx --yes @inbox-zero/emulate@0.4.5 start --port 4402 --service google,microsoft --seed /workspace/tools/emulator/dev-seed.yaml
+      - npx --yes @inbox-zero/emulate@0.5.0 start --port 4402 --service google,microsoft --seed /workspace/tools/emulator/dev-seed.yaml
     ports:
       - "4402:4402"
       - "4403:4403"
