@@ -327,6 +327,21 @@ test "native commands expose new inbox window and command palette" {
     try std.testing.expectEqual(main.Msg.toggle_command_palette, main.onCommand("mail.command-palette").?);
     try std.testing.expectEqual(main.Msg.cycle_split_next, main.onCommand("mail.next-split").?);
     try std.testing.expectEqual(main.Msg.cycle_split_previous, main.onCommand("mail.previous-split").?);
+    try std.testing.expectEqual(main.Msg.connect_gmail, main.onCommand("mail.connect-gmail").?);
+    try std.testing.expectEqual(main.Msg.connect_outlook, main.onCommand("mail.connect-outlook").?);
+    try std.testing.expectEqual(main.Msg.disconnect_selected, main.onCommand("mail.disconnect-selected").?);
+    try std.testing.expectEqual(main.Msg.close_main_window, main.onCommand("mail.close-main").?);
+}
+
+test "file menu close command targets the main native window" {
+    var model = main.initialModel();
+    var fx = main.Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    main.update(&model, .close_main_window, &fx);
+    const state = fx.windowActionState();
+    try std.testing.expectEqual(@as(u32, 1), state.close_count);
+    try std.testing.expectEqualStrings("main", state.lastLabel());
 }
 
 test "command palette starts on a keyboard-operable command row" {

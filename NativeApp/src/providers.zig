@@ -6,6 +6,7 @@ const transport = @import("platform/effects_transport.zig");
 pub const initial_key_base: u64 = 100;
 pub const gmail_detail_key_base: u64 = 1_000;
 pub const gmail_draft_detail_key_base: u64 = 10_000;
+pub const gmail_body_key_base: u64 = 20_000;
 const generation_key_stride: u64 = 100_000;
 const gmail_draft_list_folder_index: usize = 10;
 const gmail_detail_account_stride: u64 = mail.max_gmail_refs;
@@ -13,6 +14,7 @@ const gmail_draft_detail_account_stride: u64 = 16;
 const gmail_detail_concurrency: usize = 3;
 const gmail_draft_detail_concurrency: usize = 1;
 const gmail_detail_max_retries: u8 = 2;
+const gmail_metadata_query = "format=metadata&metadataHeaders=From&metadataHeaders=Reply-To&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=References";
 
 const GmailThreadReference = struct {
     id: []const u8,
@@ -327,6 +329,55 @@ pub fn handleGmailDetailResponse(model: *mail.Model, response: native_sdk.Effect
     updateSyncStatus(model);
 }
 
+pub fn fetchGmailBody(model: *mail.Model, thread_index: usize, fx: anytype, on_response: anytype, on_authorized_response: anytype) bool {
+    if (thread_index >= model.thread_count) return false;
+    const thread = &model.threads[thread_index];
+    if (thread.provider != .gmail or thread.body_loaded or thread.body_loading) return false;
+    if (thread.account_index >= model.account_count or thread.provider_message_id.isEmpty()) return false;
+    const account = &model.accounts[thread.account_index];
+    var url_buffer: [768]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/messages/{s}?format=full", .{ account.baseUrl(), thread.providerMessageID() }) catch {
+        thread.body_load_failed = true;
+        return false;
+    };
+    const key = model.sync_generation * generation_key_stride + gmail_body_key_base + thread_index;
+    if (!fetchAuthorized(fx, key, .GET, url, account, "", on_response, on_authorized_response)) {
+        thread.body_load_failed = true;
+        return false;
+    }
+    thread.body_loading = true;
+    thread.body_load_failed = false;
+    return true;
+}
+
+pub fn handleGmailBodyResponse(model: *mail.Model, response: native_sdk.EffectResponse) void {
+    const generation = response.key / generation_key_stride;
+    if (generation != model.sync_generation) return;
+    const local_key = response.key % generation_key_stride;
+    if (local_key < gmail_body_key_base or local_key >= gmail_body_key_base + mail.max_threads) return;
+    const thread_index: usize = @intCast(local_key - gmail_body_key_base);
+    if (thread_index >= model.thread_count) return;
+    const thread = &model.threads[thread_index];
+    thread.body_loading = false;
+    if (!responseOk(response)) {
+        thread.body_load_failed = true;
+        return;
+    }
+    const parsed = std.json.parseFromSlice(GmailMessage, std.heap.page_allocator, response.body, .{ .ignore_unknown_fields = true }) catch {
+        thread.body_load_failed = true;
+        return;
+    };
+    defer parsed.deinit();
+    if (!std.mem.eql(u8, parsed.value.id, thread.providerMessageID())) {
+        thread.body_load_failed = true;
+        return;
+    }
+    setGmailBody(&thread.body, &parsed.value.payload, thread.snippetSlice());
+    thread.has_attachments = gmailPayloadHasAttachment(&parsed.value.payload);
+    thread.body_loaded = true;
+    thread.body_load_failed = false;
+}
+
 pub fn fetchMutation(fx: anytype, key: u64, provider: mail.ProviderKind, operation: MutationOperation, account: *const mail.Account, thread: *const mail.MailThread, on_response: anytype, on_authorized_response: anytype) bool {
     var url_buffer: [512]u8 = undefined;
     var body_buffer: [512]u8 = undefined;
@@ -451,7 +502,7 @@ fn scheduleGmailDetail(model: *mail.Model, account_index: usize, ref_index: usiz
     const url = if (is_draft)
         std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/drafts/{s}?format=full", .{ account.baseUrl(), reference.id.slice() }) catch return false
     else
-        std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads/{s}?format=full", .{ account.baseUrl(), reference.id.slice() }) catch return false;
+        std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads/{s}?{s}", .{ account.baseUrl(), reference.id.slice(), gmail_metadata_query }) catch return false;
     const base = if (is_draft) gmail_draft_detail_key_base else gmail_detail_key_base;
     const stride = if (is_draft) gmail_draft_detail_account_stride else gmail_detail_account_stride;
     const key = model.sync_generation * generation_key_stride + base + @as(u64, @intCast(account_index)) * stride + ref_index;
@@ -560,7 +611,8 @@ pub fn parseGmailThread(model: *mail.Model, account_index: usize, body: []const 
     thread.trashed = hasLabel(message.labelIds, "TRASH");
     thread.archived = !thread.in_inbox and !thread.trashed and
         !hasLabel(message.labelIds, "SENT") and !hasLabel(message.labelIds, "DRAFT") and !hasLabel(message.labelIds, "SPAM");
-    setGmailBody(&thread.body, &message.payload, thread.snippetSlice());
+    setGmailBody(&thread.body, &message.payload, "");
+    thread.body_loaded = !thread.body.isEmpty();
     _ = model.addThread(thread);
 }
 
@@ -609,6 +661,7 @@ pub fn parseOutlookMessages(model: *mail.Model, account_index: usize, folder: Ou
             }
         }
         if (thread.body.isEmpty()) thread.body.set(thread.snippetSlice());
+        thread.body_loaded = true;
         _ = model.addThread(thread);
     }
 }
@@ -904,6 +957,67 @@ test "gmail parser maps headers labels and decoded body" {
     try std.testing.expectEqualStrings("Hello world", model.threads[0].bodySlice());
     try std.testing.expect(model.threads[0].unread);
     try std.testing.expect(model.threads[0].starred);
+    try std.testing.expect(model.threads[0].body_loaded);
+}
+
+test "gmail inbox sync requests metadata instead of full thread bodies" {
+    var model = mail.emptyModel();
+    model.addAccount(.gmail, "person@example.com", "Person", "token", "https://gmail.googleapis.com");
+    var fx = @import("main.zig").Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    startInitialSync(&model, &fx, @import("main.zig").Effects.responseMsg(.initial_response), @import("main.zig").Effects.hostMsg(.authorized_initial_response));
+    var response = native_sdk.EffectResponse{
+        .key = model.sync_generation * generation_key_stride + initial_key_base,
+        .outcome = .ok,
+        .status = 200,
+    };
+    response.body = "{\"threads\":[{\"id\":\"thread-large\"}]}";
+    handleInitialResponse(&model, response, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
+
+    var found = false;
+    for (0..fx.pendingFetchCount()) |index| {
+        const request = fx.pendingFetchAt(index) orelse continue;
+        if (std.mem.indexOf(u8, request.url, "/threads/thread-large?") == null) continue;
+        found = true;
+        try std.testing.expect(std.mem.indexOf(u8, request.url, "format=metadata") != null);
+        try std.testing.expect(std.mem.indexOf(u8, request.url, "format=full") == null);
+        try std.testing.expect(std.mem.indexOf(u8, request.url, "metadataHeaders=Subject") != null);
+    }
+    try std.testing.expect(found);
+}
+
+test "gmail full body is fetched only for the opened message" {
+    var model = mail.emptyModel();
+    model.addAccount(.gmail, "person@example.com", "Person", "token", "https://gmail.googleapis.com");
+    model.sync_generation = 3;
+    var thread = mail.MailThread{ .account_index = 0, .provider = .gmail };
+    thread.provider_thread_id.set("thread-1");
+    thread.provider_message_id.set("message-1");
+    thread.snippet.set("preview");
+    _ = model.addThread(thread);
+    var fx = @import("main.zig").Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    try std.testing.expect(fetchGmailBody(&model, 0, &fx, @import("main.zig").Effects.responseMsg(.gmail_body_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_body_response)));
+    try std.testing.expect(model.threads[0].body_loading);
+    const request = fx.pendingFetchAt(0) orelse return error.FetchNotFound;
+    try std.testing.expectEqualStrings("https://gmail.googleapis.com/gmail/v1/users/me/messages/message-1?format=full", request.url);
+
+    var response = native_sdk.EffectResponse{
+        .key = model.sync_generation * generation_key_stride + gmail_body_key_base,
+        .outcome = .ok,
+        .status = 200,
+    };
+    response.body =
+        \\{"id":"message-1","threadId":"thread-1","payload":{"mimeType":"text/plain","headers":[],"body":{"data":"RnVsbCBtZXNzYWdl"}}}
+    ;
+    handleGmailBodyResponse(&model, response);
+    try std.testing.expectEqualStrings("Full message", model.threads[0].bodySlice());
+    try std.testing.expect(model.threads[0].body_loaded);
+    try std.testing.expect(!model.threads[0].body_loading);
+    try std.testing.expect(!model.threads[0].body_load_failed);
 }
 
 test "outlook parser strips html and maps flags" {

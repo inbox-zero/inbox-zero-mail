@@ -45,6 +45,23 @@ const oauth_external_urls = [_][]const u8{
     "http://127.0.0.1:4402/*",
     "http://127.0.0.1:4403/*",
 };
+const file_menu_items = [_]native_sdk.MenuItem{
+    .{ .label = "New Message", .command = "mail.compose", .key = "n", .modifiers = .{ .primary = true, .shift = true } },
+    .{ .label = "New Inbox Window", .command = "mail.new-window", .key = "n", .modifiers = .{ .primary = true } },
+    .{ .separator = true },
+    .{ .label = "Add Gmail Account…", .command = "mail.connect-gmail" },
+    .{ .label = "Add Outlook Account…", .command = "mail.connect-outlook" },
+    .{ .label = "Sign Out Selected Account", .command = "mail.disconnect-selected" },
+    .{ .separator = true },
+    .{ .label = "Refresh Mail", .command = "mail.refresh", .key = "r", .modifiers = .{ .primary = true } },
+    .{ .separator = true },
+    .{ .label = "Close Window", .command = "mail.close-main", .key = "w", .modifiers = .{ .primary = true } },
+};
+const app_menus = [_]native_sdk.Menu{.{ .title = "File", .items = &file_menu_items }};
+const app_shortcuts = [_]native_sdk.Shortcut{
+    .{ .id = "mail.open-window", .key = "o", .modifiers = .{ .primary = true, .shift = true } },
+    .{ .id = "mail.command-palette", .key = "k", .modifiers = .{ .primary = true } },
+};
 const shell_views = [_]native_sdk.ShellView{
     .{
         .label = canvas_label,
@@ -125,6 +142,7 @@ pub const Msg = union(enum) {
     open_selected_window,
     activate_selected,
     close_reading,
+    close_main_window,
     close_window: usize,
     compose_new,
     compose_reply,
@@ -148,9 +166,11 @@ pub const Msg = union(enum) {
     outbound_response: native_sdk.EffectResponse,
     initial_response: native_sdk.EffectResponse,
     gmail_detail_response: native_sdk.EffectResponse,
+    gmail_body_response: native_sdk.EffectResponse,
     mutation_response: native_sdk.EffectResponse,
     authorized_initial_response: native_sdk.EffectHostResult,
     authorized_gmail_detail_response: native_sdk.EffectHostResult,
+    authorized_gmail_body_response: native_sdk.EffectHostResult,
     authorized_mutation_response: native_sdk.EffectHostResult,
     authorized_outbound_response: native_sdk.EffectHostResult,
 
@@ -184,14 +204,17 @@ pub const Msg = union(enum) {
         "activate_selected",
         "focus_search",
         "close_window",
+        "close_main_window",
         "initial_response",
         "gmail_detail_response",
+        "gmail_body_response",
         "mutation_response",
         "oauth_response",
         "disconnect_response",
         "oauth_restore_response",
         "authorized_initial_response",
         "authorized_gmail_detail_response",
+        "authorized_gmail_body_response",
         "authorized_mutation_response",
         "authorized_outbound_response",
         "compose_close",
@@ -276,10 +299,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .navigate_next => if (model.command_palette_open) model.movePaletteSelection(1) else model.selectRelative(1),
         .navigate_previous => if (model.command_palette_open) model.movePaletteSelection(-1) else model.selectRelative(-1),
-        .activate_context => if (model.command_palette_open)
-            runPaletteCommand(model, model.selectedPaletteCommand(), fx)
-        else
-            model.activateSelected(),
+        .activate_context => if (model.command_palette_open) {
+            runPaletteCommand(model, model.selectedPaletteCommand(), fx);
+        } else {
+            model.activateSelected();
+            requestSelectedBody(model, fx);
+        },
         .escape_context => {
             if (model.command_palette_open)
                 model.command_palette_open = false
@@ -298,9 +323,15 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .close_inbox_window => |id| model.closeInboxWindow(id),
         .set_inbox_window_filter => |action| model.setInboxWindowFilter(action),
-        .open_inbox_window_thread => |action| model.openInboxWindowThread(action),
+        .open_inbox_window_thread => |action| {
+            model.openInboxWindowThread(action);
+            if (model.threadIndexById(.{ .value = action.thread_id })) |thread_index| requestThreadBody(model, thread_index, fx);
+        },
         .close_inbox_window_thread => |window_id| model.closeInboxWindowThread(window_id),
-        .open_inbox_window_thread_window => |action| model.openInboxWindowThreadWindow(action),
+        .open_inbox_window_thread_window => |action| {
+            model.openInboxWindowThreadWindow(action);
+            if (model.threadIndexById(.{ .value = action.thread_id })) |thread_index| requestThreadBody(model, thread_index, fx);
+        },
         .show_all => model.selectFilter(.all),
         .show_unread => model.selectFilter(.unread),
         .show_starred => model.selectFilter(.starred),
@@ -330,6 +361,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .activate_thread => |index| {
             model.selectThread(index);
             model.activateSelected();
+            requestSelectedBody(model, fx);
             model.drawer_open = false;
             model.command_palette_open = false;
         },
@@ -385,9 +417,16 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 model.reconcileSelection();
             }
         },
-        .open_selected_window => model.openSelectedWindow(),
-        .activate_selected => model.activateSelected(),
+        .open_selected_window => {
+            model.openSelectedWindow();
+            requestSelectedBody(model, fx);
+        },
+        .activate_selected => {
+            model.activateSelected();
+            requestSelectedBody(model, fx);
+        },
         .close_reading => model.closeReading(),
+        .close_main_window => fx.closeWindow("main"),
         .close_window => |index| model.closeWindow(index),
         .compose_new => if (!model.command_palette_open and !model.composeBusy()) model.beginNewCompose(),
         .compose_reply => if (!model.command_palette_open and !model.composeBusy()) model.beginMessageCompose(.reply),
@@ -432,6 +471,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             providers.handleGmailDetailResponse(model, response, fx, Effects.responseMsg(.gmail_detail_response), Effects.hostMsg(.authorized_gmail_detail_response));
             cancelSyncTimeoutIfFinished(model, fx);
         },
+        .gmail_body_response => |response| providers.handleGmailBodyResponse(model, response),
         .mutation_response => |response| providers.handleMutationResponse(model, response),
         .authorized_initial_response => |result| {
             providers.handleInitialResponse(model, authorizedResponse(result), fx, Effects.responseMsg(.gmail_detail_response), Effects.hostMsg(.authorized_gmail_detail_response));
@@ -442,6 +482,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             providers.handleGmailDetailResponse(model, authorizedResponse(result), fx, Effects.responseMsg(.gmail_detail_response), Effects.hostMsg(.authorized_gmail_detail_response));
             showReconnectIfNeeded(model, result);
             cancelSyncTimeoutIfFinished(model, fx);
+        },
+        .authorized_gmail_body_response => |result| {
+            providers.handleGmailBodyResponse(model, authorizedResponse(result));
+            showReconnectIfNeeded(model, result);
         },
         .authorized_mutation_response => |result| {
             providers.handleMutationResponse(model, authorizedResponse(result));
@@ -455,6 +499,21 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             showReconnectIfNeeded(model, result);
         },
     }
+}
+
+fn requestSelectedBody(model: *Model, fx: *Effects) void {
+    if (!model.hasSelection()) return;
+    requestThreadBody(model, model.selected_thread, fx);
+}
+
+fn requestThreadBody(model: *Model, thread_index: usize, fx: *Effects) void {
+    _ = providers.fetchGmailBody(
+        model,
+        thread_index,
+        fx,
+        Effects.responseMsg(.gmail_body_response),
+        Effects.hostMsg(.authorized_gmail_body_response),
+    );
 }
 
 fn refreshMail(model: *Model, fx: *Effects) void {
@@ -695,6 +754,10 @@ pub fn onCommand(name: []const u8) ?Msg {
     if (std.mem.eql(u8, name, "mail.next-split")) return .cycle_split_next;
     if (std.mem.eql(u8, name, "mail.previous-split")) return .cycle_split_previous;
     if (std.mem.eql(u8, name, "mail.compose")) return .compose_new;
+    if (std.mem.eql(u8, name, "mail.connect-gmail")) return .connect_gmail;
+    if (std.mem.eql(u8, name, "mail.connect-outlook")) return .connect_outlook;
+    if (std.mem.eql(u8, name, "mail.disconnect-selected")) return .disconnect_selected;
+    if (std.mem.eql(u8, name, "mail.close-main")) return .close_main_window;
     return null;
 }
 
@@ -961,6 +1024,8 @@ pub fn main(init: std.process.Init) !void {
         .default_frame = geometry.RectF.init(0, 0, window_width, window_height),
         .restore_state = true,
         .js_window_api = false,
+        .menus = &app_menus,
+        .shortcuts = &app_shortcuts,
         .security = .{
             .permissions = &app_permissions,
             .navigation = .{

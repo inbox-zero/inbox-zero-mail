@@ -7,11 +7,35 @@
     .icons = .{"assets/icon.png"},
     .platforms = .{ "macos", "windows", "linux" },
     .permissions = .{ "view", "command", "network", "credentials" },
-    .capabilities = .{ "native_views", "gpu_surfaces", "network", "credentials", "open_url" },
+    .capabilities = .{ "native_views", "gpu_surfaces", "network", "credentials", "open_url", "menus" },
+    .commands = .{
+        .{ .id = "mail.compose", .title = "New Message" },
+        .{ .id = "mail.new-window", .title = "New Inbox Window" },
+        .{ .id = "mail.connect-gmail", .title = "Add Gmail Account" },
+        .{ .id = "mail.connect-outlook", .title = "Add Outlook Account" },
+        .{ .id = "mail.disconnect-selected", .title = "Sign Out Selected Account" },
+        .{ .id = "mail.refresh", .title = "Refresh Mail" },
+        .{ .id = "mail.close-main", .title = "Close Window" },
+    },
+    .menus = .{
+        .{
+            .title = "File",
+            .items = .{
+                .{ .label = "New Message", .command = "mail.compose", .key = "n", .modifiers = .{ "primary", "shift" } },
+                .{ .label = "New Inbox Window", .command = "mail.new-window", .key = "n", .modifiers = .{"primary"} },
+                .{ .separator = true },
+                .{ .label = "Add Gmail Account…", .command = "mail.connect-gmail" },
+                .{ .label = "Add Outlook Account…", .command = "mail.connect-outlook" },
+                .{ .label = "Sign Out Selected Account", .command = "mail.disconnect-selected" },
+                .{ .separator = true },
+                .{ .label = "Refresh Mail", .command = "mail.refresh", .key = "r", .modifiers = .{"primary"} },
+                .{ .separator = true },
+                .{ .label = "Close Window", .command = "mail.close-main", .key = "w", .modifiers = .{"primary"} },
+            },
+        },
+    },
     .shortcuts = .{
-        .{ .id = "mail.refresh", .key = "r", .modifiers = .{"primary"} },
         .{ .id = "mail.open-window", .key = "o", .modifiers = .{ "primary", "shift" } },
-        .{ .id = "mail.new-window", .key = "n", .modifiers = .{"primary"} },
         .{ .id = "mail.command-palette", .key = "k", .modifiers = .{"primary"} },
     },
     .shell = .{
