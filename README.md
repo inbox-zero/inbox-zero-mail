@@ -1,12 +1,21 @@
 # Inbox Zero Mail
 
-**The open-source, privacy-first native desktop email client.** The current client is built with Native SDK using declarative native markup and Zig, without Electron or an embedded browser runtime.
+**Open-source, privacy-first native desktop email clients.** This repository currently contains two independent implementations of Inbox Zero Mail.
 
 ![Inbox Zero Mail inbox](docs/screenshot.png)
 
+## Two separate products
+
+This repository contains two variants of Inbox Zero Mail:
+
+- **Swift app** (`InboxZeroMail/` and `InboxZeroMail.xcodeproj`) -- the original macOS-only product, built with Swift and SwiftUI. Existing `v*` releases belong to this implementation.
+- **Native SDK app** (`NativeApp/`) -- a separate implementation built with Vercel's Native SDK, declarative native markup, and Zig. It is designed to run on macOS, Windows, and Linux; public installers are being rolled out per platform.
+
+These are separate products rather than two frontends over a shared application. They do not share UI, state management, or provider code, and a feature added to one does not automatically exist in the other. They may move into separate repositories later because there is no runtime dependency between them.
+
 ## Why Inbox Zero Mail?
 
-Most modern email clients are Electron apps. Inbox Zero Mail uses Native SDK's native renderer and keeps mail state and provider logic in Zig. The earlier Swift implementation remains in this repository while the Native SDK client reaches parity.
+Most modern email clients are Electron apps. The Native SDK variant uses Native SDK's native renderer and keeps mail state and provider logic in Zig. The Swift variant is a conventional native macOS application.
 
 It is also yours. The code is open source, the architecture is modular, and the app is easy to hack on: point Claude Code, Codex, or your editor at the repo and change the workflow, UI, shortcuts, or provider behavior to match how you actually handle email.
 
@@ -25,6 +34,8 @@ It is also yours. The code is open source, the architecture is modular, and the 
 - 🗂️ **Split inbox** -- organize your inbox into customizable tabs (Unread, Starred, Snoozed, by label, or custom search queries).
 
 ## Features
+
+The status below describes the Native SDK variant. See the Swift source and its release notes for the Swift product's current feature set.
 
 | Feature | Status |
 |---|---|
@@ -63,17 +74,16 @@ It is also yours. The code is open source, the architecture is modular, and the 
 
 ### Download
 
-Download the latest macOS release:
+Downloadable builds are published on [GitHub Releases](../../releases):
 
-[Download Inbox Zero for macOS](../../releases/latest)
+- Tags named `v*` (currently `v0.1.3`) are the Swift macOS product. Download its `Inbox-Zero-*.zip` asset.
+- Tags named `native-v*` are the Native SDK product. On macOS, download `Inbox-Zero-Native-*.dmg` and drag `Inbox Zero Mail.app` to Applications.
 
-On the release page, download `Inbox-Zero-Native-*.dmg` and drag
-`Inbox Zero Mail.app` to your Applications folder.
+If no `native-v*` release is listed yet, a downloadable Native SDK build has not been published. Windows and Linux Native SDK builds currently require building from source; public installers will follow.
 
-The first Native SDK release targets Apple Silicon macOS. Windows packaging is
-available for source builds and will follow as a public installer.
+The first Native SDK release targets Apple Silicon macOS.
 
-### Build from Source
+### Build the Native SDK product from source
 
 Requires Node.js 24, Docker, and the native platform build dependencies.
 
@@ -94,6 +104,8 @@ create `Config/LocalSecrets.xcconfig` and run:
 See [NativeApp/README.md](NativeApp/README.md) for packaging, OAuth, testing,
 and provider details.
 
+To build the separate Swift macOS product, open `InboxZeroMail.xcodeproj` in Xcode or follow [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Privacy
 
 Inbox Zero Mail talks directly to Gmail and Microsoft Graph. OAuth tokens are
@@ -101,9 +113,9 @@ stored in the operating system credential store and do not enter the UI model
 or automation effect journal. Debug and automation recordings can contain mail
 content and should never be published from real accounts.
 
-## Architecture
+## Native SDK architecture
 
-The release client lives in `NativeApp/`:
+The cross-platform product lives in `NativeApp/`:
 
 ```
 NativeApp
