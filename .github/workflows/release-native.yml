@@ -135,7 +135,7 @@ jobs:
           xcrun stapler validate "$APP_PATH"
           spctl -a -vvv -t install "$APP_PATH"
 
-      - name: Build DMG
+      - name: Build and sign DMG
         shell: bash
         run: |
           set -euo pipefail
@@ -146,6 +146,10 @@ jobs:
             -ov \
             -format UDZO \
             "$dmg_path"
+          codesign --force --timestamp \
+            --sign "Developer ID Application" \
+            "$dmg_path"
+          codesign --verify --verbose=2 "$dmg_path"
           echo "DMG_PATH=$dmg_path" >> "$GITHUB_ENV"
 
       - name: Notarize and staple DMG
@@ -163,6 +167,8 @@ jobs:
             --wait
           xcrun stapler staple -v "$DMG_PATH"
           xcrun stapler validate "$DMG_PATH"
+          codesign --verify --verbose=2 "$DMG_PATH"
+          spctl -a -vvv -t open --context context:primary-signature "$DMG_PATH"
 
       - name: Publish GitHub release
         shell: bash
