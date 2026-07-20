@@ -30,6 +30,8 @@ pub const window_width: f32 = 1280;
 pub const window_height: f32 = 780;
 pub const window_min_width: f32 = 860;
 pub const window_min_height: f32 = 560;
+const sync_timeout_key: u64 = 0x7000_0000_0000_0001;
+const sync_timeout_ms: u64 = 120_000;
 
 const app_permissions = [_][]const u8{
     native_sdk.security.permission_command,
@@ -142,6 +144,7 @@ pub const Msg = union(enum) {
     compose_send,
     open_draft: usize,
     compose_autosave: native_sdk.EffectTimer,
+    sync_timeout: native_sdk.EffectTimer,
     outbound_response: native_sdk.EffectResponse,
     initial_response: native_sdk.EffectResponse,
     gmail_detail_response: native_sdk.EffectResponse,
@@ -193,6 +196,7 @@ pub const Msg = union(enum) {
         "authorized_outbound_response",
         "compose_close",
         "compose_autosave",
+        "sync_timeout",
         "outbound_response",
     };
 };
@@ -231,11 +235,12 @@ fn oauthSettings(init: std.process.Init) native_services.OAuthSettings {
 pub fn boot(model: *Model, fx: *Effects) void {
     model.now_ms = fx.wallMs();
     if (model.account_count > 0) {
-        providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
+        startMailSync(model, fx);
         return;
     }
     model.restore_failed = false;
     model.restore_pending = mail.max_accounts;
+    model.status_message.set("Looking for saved accounts.");
     for (0..mail.max_accounts) |index| {
         var payload = [_]u8{'0'};
         payload[0] += @intCast(index);
@@ -365,7 +370,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
             model.removeDisconnectedAccount();
             model.status_message.set("Account disconnected and credential removed.");
-            if (model.account_count > 0) providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
+            if (model.account_count > 0) startMailSync(model, fx);
         },
         .sidebar_resized => |fraction| model.sidebar_split = fraction,
         .list_resized => |fraction| model.list_split = fraction,
@@ -409,22 +414,34 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .open_draft => |id| if (!model.composeBusy()) model.openDraftById(id),
         .compose_autosave => |timer| if (timer.outcome == .fired and model.composer.dirty)
             outbound.save(model, fx, Effects.responseMsg(.outbound_response), Effects.hostMsg(.authorized_outbound_response), false),
+        .sync_timeout => |timer| switch (timer.outcome) {
+            .fired => providers.timeoutSync(model),
+            .rejected => if (model.syncInFlight()) model.status_message.set("Synchronization is running without timeout protection."),
+        },
         .outbound_response => |response| {
             const sync_was_in_flight = model.syncInFlight();
             if (outbound.handleResponse(model, response, fx, Effects.responseMsg(.outbound_response), Effects.hostMsg(.authorized_outbound_response)) and sync_was_in_flight) {
-                providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
+                startMailSync(model, fx);
             }
         },
-        .initial_response => |response| providers.handleInitialResponse(model, response, fx, Effects.responseMsg(.gmail_detail_response), Effects.hostMsg(.authorized_gmail_detail_response)),
-        .gmail_detail_response => |response| providers.handleGmailDetailResponse(model, response, fx, Effects.responseMsg(.gmail_detail_response), Effects.hostMsg(.authorized_gmail_detail_response)),
+        .initial_response => |response| {
+            providers.handleInitialResponse(model, response, fx, Effects.responseMsg(.gmail_detail_response), Effects.hostMsg(.authorized_gmail_detail_response));
+            cancelSyncTimeoutIfFinished(model, fx);
+        },
+        .gmail_detail_response => |response| {
+            providers.handleGmailDetailResponse(model, response, fx, Effects.responseMsg(.gmail_detail_response), Effects.hostMsg(.authorized_gmail_detail_response));
+            cancelSyncTimeoutIfFinished(model, fx);
+        },
         .mutation_response => |response| providers.handleMutationResponse(model, response),
         .authorized_initial_response => |result| {
             providers.handleInitialResponse(model, authorizedResponse(result), fx, Effects.responseMsg(.gmail_detail_response), Effects.hostMsg(.authorized_gmail_detail_response));
             showReconnectIfNeeded(model, result);
+            cancelSyncTimeoutIfFinished(model, fx);
         },
         .authorized_gmail_detail_response => |result| {
             providers.handleGmailDetailResponse(model, authorizedResponse(result), fx, Effects.responseMsg(.gmail_detail_response), Effects.hostMsg(.authorized_gmail_detail_response));
             showReconnectIfNeeded(model, result);
+            cancelSyncTimeoutIfFinished(model, fx);
         },
         .authorized_mutation_response => |result| {
             providers.handleMutationResponse(model, authorizedResponse(result));
@@ -433,7 +450,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .authorized_outbound_response => |result| {
             const sync_was_in_flight = model.syncInFlight();
             if (outbound.handleResponse(model, authorizedResponse(result), fx, Effects.responseMsg(.outbound_response), Effects.hostMsg(.authorized_outbound_response)) and sync_was_in_flight) {
-                providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
+                startMailSync(model, fx);
             }
             showReconnectIfNeeded(model, result);
         },
@@ -443,7 +460,22 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 fn refreshMail(model: *Model, fx: *Effects) void {
     model.now_ms = fx.wallMs();
     model.status_message.set("Refreshing all accounts.");
+    startMailSync(model, fx);
+}
+
+fn startMailSync(model: *Model, fx: *Effects) void {
+    if (model.account_count == 0) return;
     providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
+    if (!model.syncInFlight()) return;
+    fx.startTimer(.{
+        .key = sync_timeout_key,
+        .interval_ms = sync_timeout_ms,
+        .on_fire = Effects.timerMsg(.sync_timeout),
+    });
+}
+
+fn cancelSyncTimeoutIfFinished(model: *const Model, fx: *Effects) void {
+    if (!model.syncInFlight()) fx.cancelTimer(sync_timeout_key);
 }
 
 fn runPaletteCommand(model: *Model, command_id: usize, fx: *Effects) void {
@@ -540,7 +572,7 @@ fn handleOAuthResult(model: *Model, result: native_sdk.EffectHostResult, fx: *Ef
     };
     model.selectAccount(index);
     model.status_message.set("Account connected. Synchronizing mail.");
-    providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
+    startMailSync(model, fx);
 }
 
 fn handleRestoreResult(model: *Model, result: native_sdk.EffectHostResult, fx: *Effects) void {
@@ -576,7 +608,7 @@ fn finishRestore(model: *Model, fx: *Effects) void {
         return;
     }
     model.status_message.set(if (model.restore_failed) "Some saved accounts could not be restored. Synchronizing the available accounts." else "Restored saved accounts. Synchronizing mail.");
-    providers.startInitialSync(model, fx, Effects.responseMsg(.initial_response), Effects.hostMsg(.authorized_initial_response));
+    startMailSync(model, fx);
 }
 
 const ComposeField = enum { to, cc, bcc, subject, body };

@@ -47,6 +47,51 @@ fn findByLabel(widget: canvas.Widget, kind: canvas.WidgetKind, wanted: []const u
     return null;
 }
 
+test "first run presents sign-in choices instead of an empty inbox" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    var model = mail.emptyModel();
+
+    const tree = try buildTree(arena_state.allocator(), &model);
+    _ = findByText(tree.root, .text, "Sign in to your email") orelse return error.WidgetNotFound;
+    try std.testing.expect(findByText(tree.root, .text, "No messages match this view.") == null);
+
+    const gmail = findByText(tree.root, .button, "Connect Gmail") orelse return error.WidgetNotFound;
+    const outlook = findByText(tree.root, .button, "Connect Outlook") orelse return error.WidgetNotFound;
+    try std.testing.expectEqual(main.Msg.connect_gmail, tree.msgForPointer(gmail.id, .up).?);
+    try std.testing.expectEqual(main.Msg.connect_outlook, tree.msgForPointer(outlook.id, .up).?);
+}
+
+test "sync progress is visible while Gmail details are loading" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    var model = mail.emptyModel();
+    model.addAccount(.gmail, "person@example.com", "Person", "token", "https://gmail.googleapis.com");
+    model.accounts[0].sync_state = .loading;
+    model.accounts[0].gmail_ref_count = 5;
+    model.accounts[0].gmail_next_ref = 3;
+    model.accounts[0].gmail_in_flight = 2;
+
+    const tree = try buildTree(arena_state.allocator(), &model);
+    _ = findByText(tree.root, .text, "Syncing 1 of 5") orelse return error.WidgetNotFound;
+}
+
+test "sync watchdog clears a permanently loading account" {
+    var model = mail.emptyModel();
+    model.addAccount(.gmail, "person@example.com", "Person", "token", "https://gmail.googleapis.com");
+    model.accounts[0].sync_state = .loading;
+    model.sync_generation = 1;
+    var fx = main.Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    main.update(&model, .{ .sync_timeout = .{ .key = 1 } }, &fx);
+
+    try std.testing.expect(!model.loading());
+    try std.testing.expectEqual(.partial, model.accounts[0].sync_state);
+    try std.testing.expect(std.mem.indexOf(u8, model.status_message.slice(), "timed out") != null);
+}
+
 test "compact inbox keeps the selected message available to the detail window" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();

@@ -320,6 +320,14 @@ pub const Model = struct {
         return model.oauth_busy and model.oauth_key != 0;
     }
 
+    pub fn needsAccountSignIn(model: *const Model) bool {
+        return model.account_count == 0;
+    }
+
+    pub fn accountSetupBusy(model: *const Model) bool {
+        return model.restore_pending > 0 or model.oauth_busy;
+    }
+
     pub fn beginOAuth(model: *Model) ?u64 {
         if (model.oauth_busy or model.account_count >= max_accounts) return null;
         const key = 0x4000_0000_0000_0000 | (model.mutation_counter & 0x0fff_ffff_ffff_ffff);
@@ -505,6 +513,27 @@ pub const Model = struct {
         return if (model.loading()) "Syncing accounts" else "Up to date";
     }
 
+    pub fn syncProgressLabel(model: *const Model, arena: std.mem.Allocator) []const u8 {
+        var completed: usize = 0;
+        var total: usize = 0;
+        for (model.accounts[0..model.account_count]) |account| {
+            if (account.provider != .gmail) continue;
+            completed += account.gmail_next_ref -| account.gmail_in_flight;
+            completed += account.gmail_draft_next_ref -| account.gmail_draft_in_flight;
+            total += account.gmail_ref_count + account.gmail_draft_ref_count;
+        }
+        if (!model.loading()) return if (model.hasSyncProblems()) "Sync needs attention" else "Up to date";
+        if (total == 0) return "Starting synchronization";
+        return std.fmt.allocPrint(arena, "Syncing {d} of {d}", .{ completed, total }) catch "Synchronizing mail";
+    }
+
+    pub fn hasSyncProblems(model: *const Model) bool {
+        for (model.accounts[0..model.account_count]) |account| {
+            if (account.sync_state == .partial or account.sync_state == .failed) return true;
+        }
+        return false;
+    }
+
     pub fn statusMessage(model: *const Model) []const u8 {
         return model.status_message.slice();
     }
@@ -527,7 +556,7 @@ pub const Model = struct {
             .selected = model.selected_account == no_index,
             .unread_count = model.unreadCountForAccount(no_index),
             .provider_name = "Unified",
-            .sync_label = model.loadingLabel(),
+            .sync_label = model.syncProgressLabel(arena),
         };
         for (model.accounts[0..model.account_count], 0..) |*account, index| {
             out[index + 1] = .{
@@ -537,10 +566,26 @@ pub const Model = struct {
                 .selected = model.selected_account == index,
                 .unread_count = model.unreadCountForAccount(index),
                 .provider_name = if (account.provider == .gmail) "Gmail" else "Outlook",
-                .sync_label = @tagName(account.sync_state),
+                .sync_label = accountSyncLabel(account, arena),
             };
         }
         return out;
+    }
+
+    fn accountSyncLabel(account: *const Account, arena: std.mem.Allocator) []const u8 {
+        return switch (account.sync_state) {
+            .idle => "Waiting to synchronize",
+            .ready => "Up to date",
+            .partial, .failed => if (account.error_message.isEmpty()) "Synchronization needs attention" else account.error_message.slice(),
+            .loading => loading: {
+                if (account.provider == .microsoft) break :loading "Synchronizing Outlook folders";
+                const completed = (account.gmail_next_ref -| account.gmail_in_flight) +
+                    (account.gmail_draft_next_ref -| account.gmail_draft_in_flight);
+                const total = account.gmail_ref_count + account.gmail_draft_ref_count;
+                if (total == 0) break :loading "Loading Gmail message list";
+                break :loading std.fmt.allocPrint(arena, "Syncing {d} of {d} Gmail items", .{ completed, total }) catch "Synchronizing Gmail";
+            },
+        };
     }
 
     pub fn paletteCommands(model: *const Model, arena: std.mem.Allocator) []const PaletteCommandView {
