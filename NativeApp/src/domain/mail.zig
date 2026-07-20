@@ -36,6 +36,9 @@ pub const MailThread = struct {
     trashed: bool = false,
     snoozed: bool = false,
     has_attachments: bool = false,
+    body_loaded: bool = false,
+    body_loading: bool = false,
+    body_load_failed: bool = false,
 
     pub fn subjectSlice(self: *const MailThread) []const u8 {
         return self.subject.slice();

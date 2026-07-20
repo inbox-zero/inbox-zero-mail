@@ -215,6 +215,8 @@ pub const Model = struct {
         "selectedSubject",
         "selectedSender",
         "selectedBody",
+        "selectedBodyLoading",
+        "selectedBodyLoadFailed",
         "selectedAccountLabel",
         "selectedStarLabel",
         "selectedReadLabel",
@@ -250,6 +252,14 @@ pub const Model = struct {
             return thread.snippetSlice();
         }
         return "";
+    }
+
+    pub fn selectedBodyLoading(model: *const Model) bool {
+        return if (model.selected()) |thread| thread.body_loading else false;
+    }
+
+    pub fn selectedBodyLoadFailed(model: *const Model) bool {
+        return if (model.selected()) |thread| thread.body_load_failed else false;
     }
 
     pub fn selectedAccountLabel(model: *const Model) []const u8 {
@@ -907,6 +917,7 @@ pub const Model = struct {
 
     pub fn addThread(model: *Model, thread: MailThread) ?usize {
         var candidate = thread;
+        if (!candidate.body.isEmpty()) candidate.body_loaded = true;
         if (!candidate.account_id.isValid() and candidate.account_index < model.account_count) {
             candidate.account_id = model.accounts[candidate.account_index].id;
         }

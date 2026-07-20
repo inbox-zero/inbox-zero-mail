@@ -54,6 +54,15 @@
               <text size="sm" foreground="text_muted">{selectedAccountLabel}</text>
             </column>
             <separator />
+            <if test="{selectedBodyLoading}">
+              <row gap="8" cross="center">
+                <spinner width="16" height="16" label="Loading full message" />
+                <text size="sm" foreground="text_muted">Loading full message…</text>
+              </row>
+            </if>
+            <if test="{selectedBodyLoadFailed}">
+              <text size="sm" foreground="warning">The full message could not be loaded. Showing its preview.</text>
+            </if>
             <text wrap="true">{selectedBody}</text>
           </column>
         </row>
@@ -65,6 +74,7 @@
   <column background="background">
     <row height="60" padding="12" gap="8" cross="center" background="surface" window-drag="true" label="Mail toolbar">
       <button size="sm" variant="ghost" icon="menu" label="Open navigation" on-press="toggle_drawer"></button>
+      <button size="sm" variant="ghost" on-press="toggle_drawer">Accounts</button>
       <tabs gap="6" grow="1" label="Mailbox views">
         <button size="sm" variant="ghost" selected="{isAllView}" on-press="show_all">All  {allCount}</button>
         <button size="sm" variant="ghost" selected="{isUnreadView}" on-press="show_unread">Unread  {unreadCount}</button>
