@@ -3,7 +3,7 @@
     .name = "inbox-zero-mail-native",
     .display_name = "Inbox Zero Mail",
     .description = "A privacy-first native Gmail and Outlook desktop client.",
-    .version = "0.1.2",
+    .version = "0.1.3",
     .icons = .{"assets/icon.png"},
     .platforms = .{ "macos", "windows", "linux" },
     .permissions = .{ "view", "command", "network", "credentials" },
