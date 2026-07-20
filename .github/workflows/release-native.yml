@@ -58,6 +58,7 @@ jobs:
           set -euo pipefail
           npx --yes "@native-sdk/cli@${NATIVE_SDK_VERSION}" test . --yes
           npx --yes "@native-sdk/cli@${NATIVE_SDK_VERSION}" check . --strict
+          export PATH="$HOME/.native/toolchains/zig-0.16.0:$PATH"
           npx --yes "@native-sdk/cli@${NATIVE_SDK_VERSION}" doctor --manifest app.zon --strict
 
       - name: Generate packaged OAuth configuration
