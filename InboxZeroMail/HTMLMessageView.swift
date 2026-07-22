@@ -325,6 +325,7 @@ struct HTMLMessageView: NSViewRepresentable {
 
     @AppStorage(AppPreferences.imageProxyBaseURLKey)
     private var imageProxyBaseURL = ""
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var contentHeight: CGFloat
 
     init(
@@ -352,10 +353,7 @@ struct HTMLMessageView: NSViewRepresentable {
         let webView = NonScrollingWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
-        // Force light appearance — the app content area is always light,
-        // but WKWebView follows system dark mode which produces invisible
-        // light-on-light text when the Mac is in dark mode.
-        webView.appearance = NSAppearance(named: .aqua)
+        webView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
 
         // Inject height reporting script (runs after load)
         let heightScript = WKUserScript(
@@ -385,6 +383,7 @@ struct HTMLMessageView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        webView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         context.coordinator.latestHTML = wrapHTML(htmlBody)
         guard context.coordinator.isReadyToLoad else { return }
         context.coordinator.loadLatestHTML(into: webView)
@@ -416,47 +415,58 @@ struct HTMLMessageView: NSViewRepresentable {
             }
         """
 
+        let isDark = colorScheme == .dark
+        let pageBackground = isDark ? "#13151a" : "#ffffff"
+        let defaultTextColor = isDark ? "#eef0f4" : "#1a1b26"
+        let linkColor = isDark ? "#6ba6ff" : "#4085f6"
+        let blockquoteBorder = isDark ? "#3a3f4d" : "#d0d4dc"
+        let blockquoteText = isDark ? "#a4a8b3" : "#72747e"
+        let codeBackground = isDark ? "#1f2230" : "#f4f5f7"
+        let colorSchemeMeta = isDark ? "dark" : "light"
+
         return """
         <!DOCTYPE html>
         <html>
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="color-scheme" content="\(colorSchemeMeta)">
         \(securityHeaders)
         <style>
             :root {
-                color-scheme: light dark;
+                color-scheme: \(colorSchemeMeta);
             }
             html, body {
                 overflow: hidden;
+                background: \(pageBackground);
             }
             body {
                 font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
                 font-size: 13px;
                 line-height: 1.5;
-                color: #1a1b26;
+                color: \(defaultTextColor);
                 margin: 0;
                 padding: 0;
                 word-wrap: break-word;
                 overflow-wrap: break-word;
             }
-            a { color: #4085f6; text-decoration: none; }
+            a { color: \(linkColor); text-decoration: none; }
             a:hover { text-decoration: underline; }
             img {
                 max-width: 100%;
                 height: auto;
             }
             blockquote {
-                border-left: 3px solid #d0d4dc;
+                border-left: 3px solid \(blockquoteBorder);
                 margin: 8px 0;
                 padding: 4px 12px;
-                color: #72747e;
+                color: \(blockquoteText);
             }
             \(quotedContentStyles)
             pre, code {
                 font-family: "SF Mono", Menlo, monospace;
                 font-size: 12px;
-                background: #f4f5f7;
+                background: \(codeBackground);
                 border-radius: 4px;
                 padding: 2px 4px;
             }

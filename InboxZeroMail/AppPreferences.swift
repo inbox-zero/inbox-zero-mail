@@ -1,6 +1,31 @@
 import Foundation
+import SwiftUI
 import DesignSystem
 import MailCore
+
+enum AppearancePreference: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
 
 enum AppPreferences {
     struct AccountAvatarColorOption: Identifiable, Hashable {
@@ -20,6 +45,17 @@ enum AppPreferences {
     static let defaultSplitInboxItems: [SplitInboxItem] = SplitInboxItem.defaultItems
     static let threadRowDensityKey = "preferences.threadRowDensity"
     static let defaultThreadRowDensity: ThreadRowDensity = .comfortable
+
+    static let appearanceKey = "preferences.appearance"
+    static let defaultAppearance: AppearancePreference = .system
+
+    static func appearance(defaults: UserDefaults = .standard) -> AppearancePreference {
+        guard let rawValue = defaults.string(forKey: appearanceKey),
+              let value = AppearancePreference(rawValue: rawValue) else {
+            return defaultAppearance
+        }
+        return value
+    }
 
     static let accountAvatarColorsVersionKey = "preferences.accountAvatarColors.version"
     static let accountAvatarColorOptions = [
