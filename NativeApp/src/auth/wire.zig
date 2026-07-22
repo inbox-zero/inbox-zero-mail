@@ -6,7 +6,9 @@ pub const service_cancel = "inbox-zero.oauth.cancel.v1";
 pub const service_disconnect = "inbox-zero.oauth.disconnect.v1";
 pub const service_restore = "inbox-zero.oauth.restore.v1";
 pub const max_host_payload_bytes: usize = 64 * 1024;
-pub const max_host_result_bytes: usize = 256 * 1024;
+// A 50-part Gmail metadata batch can exceed 256 KiB for long conversations,
+// even though full message bodies are excluded by the fields selector.
+pub const max_host_result_bytes: usize = 2 * 1024 * 1024;
 pub const max_session_key_bytes: usize = 256;
 pub const max_url_bytes: usize = 4096;
 pub const max_content_type_bytes: usize = 256;

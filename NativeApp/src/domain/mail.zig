@@ -12,6 +12,7 @@ pub const MailThread = struct {
     // and async code should retain account_id instead.
     account_index: usize = 0,
     provider: account.ProviderKind = .gmail,
+    sync_generation: u64 = 0,
     provider_thread_id: text.Text(512) = .{},
     provider_message_id: text.Text(512) = .{},
     rfc_message_id: text.Text(512) = .{},

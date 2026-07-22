@@ -8,13 +8,16 @@ pub const gmail_detail_key_base: u64 = 1_000;
 pub const gmail_draft_detail_key_base: u64 = 10_000;
 pub const gmail_body_key_base: u64 = 20_000;
 const generation_key_stride: u64 = 100_000;
+const gmail_inbox_list_folder_index: usize = 0;
+const gmail_background_list_folder_index: usize = 1;
 const gmail_draft_list_folder_index: usize = 10;
 const gmail_detail_account_stride: u64 = mail.max_gmail_refs;
 const gmail_draft_detail_account_stride: u64 = 16;
-const gmail_detail_concurrency: usize = 3;
-const gmail_draft_detail_concurrency: usize = 1;
+// Gmail permits 100 subrequests per batch but recommends no more than 50 to
+// reduce per-user rate limiting. One inbox page therefore takes two batches.
+const gmail_batch_size: usize = 50;
 const gmail_detail_max_retries: u8 = 2;
-const gmail_metadata_query = "format=metadata&metadataHeaders=From&metadataHeaders=Reply-To&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=References";
+const gmail_metadata_query = "format=metadata&fields=id%2Csnippet%2Cmessages%28id%2CthreadId%2ClabelIds%2Csnippet%2CinternalDate%2Cpayload%28headers%29%29&metadataHeaders=From&metadataHeaders=Reply-To&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=References";
 
 const GmailThreadReference = struct {
     id: []const u8,
@@ -124,6 +127,9 @@ pub fn startInitialSync(model: *mail.Model, fx: anytype, on_response: anytype, o
     for (model.accounts[0..model.account_count], 0..) |*account, index| {
         account.sync_state = .loading;
         account.gmail_ref_count = 0;
+        account.gmail_background_ref_count = 0;
+        account.gmail_inbox_list_done = false;
+        account.gmail_background_list_done = false;
         account.gmail_next_ref = 0;
         account.gmail_in_flight = 0;
         account.gmail_retry_counts = [_]u8{0} ** mail.max_gmail_refs;
@@ -153,15 +159,28 @@ pub fn startInitialSync(model: *mail.Model, fx: anytype, on_response: anytype, o
             finishOutlookSync(model, account);
             continue;
         }
-        if (std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads?maxResults=128&includeSpamTrash=true", .{account.baseUrl()})) |url| {
+        // Populate the visible inbox first. The broader listing below is a
+        // background backfill for starred/archive/trash views.
+        if (std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads?maxResults=100&labelIds=INBOX", .{account.baseUrl()})) |url| {
             if (!fetchAuthorized(fx, generation * generation_key_stride + initial_key_base + index, .GET, url, account, "", on_response, on_authorized_response)) {
-                account.error_message.set("The Gmail thread list request could not be started.");
-                account.gmail_threads_done = true;
+                account.error_message.set("The Gmail inbox request could not be started.");
+                account.gmail_inbox_list_done = true;
             }
         } else |_| {
-            account.error_message.set("Could not build the Gmail thread list URL.");
-            account.gmail_threads_done = true;
+            account.error_message.set("Could not build the Gmail inbox URL.");
+            account.gmail_inbox_list_done = true;
         }
+        if (std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads?maxResults=128&includeSpamTrash=true", .{account.baseUrl()})) |url| {
+            const background_key = generation * generation_key_stride + initial_key_base + gmail_background_list_folder_index * mail.max_accounts + index;
+            if (!fetchAuthorized(fx, background_key, .GET, url, account, "", on_response, on_authorized_response)) {
+                account.error_message.set("The Gmail background request could not be started.");
+                account.gmail_background_list_done = true;
+            }
+        } else |_| {
+            account.error_message.set("Could not build the Gmail background URL.");
+            account.gmail_background_list_done = true;
+        }
+        if (account.gmail_inbox_list_done and account.gmail_background_list_done) account.gmail_threads_done = true;
         const drafts_url = std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/drafts?maxResults=50", .{account.baseUrl()}) catch {
             account.error_message.set("Could not build the Gmail drafts URL.");
             account.gmail_drafts_done = true;
@@ -211,7 +230,14 @@ pub fn handleInitialResponse(model: *mail.Model, response: native_sdk.EffectResp
             finishOutlookSync(model, account);
         } else if (account.provider == .gmail) {
             account.error_message.set("One or more Gmail collections could not be loaded.");
-            if (folder_index == gmail_draft_list_folder_index) account.gmail_drafts_done = true else account.gmail_threads_done = true;
+            if (folder_index == gmail_draft_list_folder_index) {
+                account.gmail_drafts_done = true;
+            } else if (folder_index == gmail_background_list_folder_index) {
+                account.gmail_background_list_done = true;
+            } else {
+                account.gmail_inbox_list_done = true;
+            }
+            scheduleNextGmailDetail(model, account_index, fx, detail_response, authorized_detail_response);
             finishGmailSync(model, account);
         } else {
             failAccount(account, "Initial provider sync failed.");
@@ -230,10 +256,22 @@ pub fn handleInitialResponse(model: *mail.Model, response: native_sdk.EffectResp
                     return;
                 };
                 scheduleNextGmailDraftDetail(model, account_index, fx, detail_response, authorized_detail_response);
+            } else if (folder_index == gmail_background_list_folder_index) {
+                parseGmailBackgroundList(account, response.body) catch {
+                    account.error_message.set("Gmail returned an unreadable background thread list.");
+                    account.gmail_background_list_done = true;
+                    scheduleNextGmailDetail(model, account_index, fx, detail_response, authorized_detail_response);
+                    finishGmailSync(model, account);
+                    updateSyncStatus(model);
+                    return;
+                };
+                scheduleNextGmailDetail(model, account_index, fx, detail_response, authorized_detail_response);
             } else {
-                parseGmailList(account, response.body) catch {
-                    account.error_message.set("Gmail returned an unreadable thread list.");
-                    account.gmail_threads_done = true;
+                parseGmailInboxList(account, response.body) catch {
+                    account.error_message.set("Gmail returned an unreadable inbox thread list.");
+                    account.gmail_inbox_list_done = true;
+                    appendBackgroundGmailRefs(account);
+                    scheduleNextGmailDetail(model, account_index, fx, detail_response, authorized_detail_response);
                     finishGmailSync(model, account);
                     updateSyncStatus(model);
                     return;
@@ -277,9 +315,9 @@ pub fn handleGmailDetailResponse(model: *mail.Model, response: native_sdk.Effect
     const account = &model.accounts[account_index];
     if (ref_index >= (if (is_draft) account.gmail_draft_ref_count else account.gmail_ref_count)) return;
     if (is_draft) {
-        if (account.gmail_draft_in_flight > 0) account.gmail_draft_in_flight -= 1;
+        account.gmail_draft_in_flight -|= gmailBatchCount(account, ref_index, true);
     } else {
-        if (account.gmail_in_flight > 0) account.gmail_in_flight -= 1;
+        account.gmail_in_flight -|= gmailBatchCount(account, ref_index, false);
     }
     if (!responseOk(response)) {
         if (retryGmailDetail(model, account_index, ref_index, is_draft, fx, detail_response, authorized_detail_response)) {
@@ -299,7 +337,7 @@ pub fn handleGmailDetailResponse(model: *mail.Model, response: native_sdk.Effect
         return;
     }
     if (is_draft) {
-        parseGmailDraft(model, account_index, response.body) catch {
+        parseGmailBatchResponse(model, account_index, response.body, gmailBatchCount(account, ref_index, true), true) catch {
             if (retryGmailDetail(model, account_index, ref_index, true, fx, detail_response, authorized_detail_response)) {
                 scheduleNextGmailDraftDetail(model, account_index, fx, detail_response, authorized_detail_response);
                 updateSyncStatus(model);
@@ -312,7 +350,7 @@ pub fn handleGmailDetailResponse(model: *mail.Model, response: native_sdk.Effect
         };
         scheduleNextGmailDraftDetail(model, account_index, fx, detail_response, authorized_detail_response);
     } else {
-        parseGmailThread(model, account_index, response.body) catch {
+        parseGmailBatchResponse(model, account_index, response.body, gmailBatchCount(account, ref_index, false), false) catch {
             if (retryGmailDetail(model, account_index, ref_index, false, fx, detail_response, authorized_detail_response)) {
                 scheduleNextGmailDetail(model, account_index, fx, detail_response, authorized_detail_response);
                 updateSyncStatus(model);
@@ -455,24 +493,31 @@ fn outlookMutationRequest(operation: MutationOperation, account: *const mail.Acc
 }
 
 fn fetchAuthorized(fx: anytype, key: u64, method: std.http.Method, url: []const u8, account: *const mail.Account, body: []const u8, on_response: anytype, on_authorized_response: anytype) bool {
+    return fetchAuthorizedTyped(fx, key, method, url, account, body, if (body.len > 0) "application/json" else null, on_response, on_authorized_response);
+}
+
+fn fetchAuthorizedTyped(fx: anytype, key: u64, method: std.http.Method, url: []const u8, account: *const mail.Account, body: []const u8, content_type: ?[]const u8, on_response: anytype, on_authorized_response: anytype) bool {
     return transport.fetchAuthorized(fx, key, .{
         .method = method,
         .url = url,
-        .content_type = if (body.len > 0) "application/json" else null,
+        .content_type = content_type,
         .body = if (body.len > 0) body else null,
     }, account.tokenSlice(), account.credential_key.slice(), on_response, on_authorized_response);
 }
 
 fn scheduleNextGmailDetail(model: *mail.Model, account_index: usize, fx: anytype, detail_response: anytype, authorized_detail_response: anytype) void {
     const account = &model.accounts[account_index];
-    while (account.gmail_in_flight < gmail_detail_concurrency and account.gmail_next_ref < account.gmail_ref_count) {
+    if (account.gmail_in_flight == 0 and account.gmail_next_ref < account.gmail_ref_count) {
         const ref_index = account.gmail_next_ref;
-        account.gmail_next_ref += 1;
+        account.gmail_next_ref += gmailBatchCount(account, ref_index, false);
         if (!scheduleGmailDetail(model, account_index, ref_index, false, fx, detail_response, authorized_detail_response)) {
-            account.error_message.set("A Gmail thread request could not be started.");
+            account.gmail_next_ref = ref_index;
+            account.error_message.set("A Gmail metadata batch could not be started.");
         }
     }
-    if (account.gmail_next_ref >= account.gmail_ref_count and account.gmail_in_flight == 0) {
+    if (account.gmail_inbox_list_done and account.gmail_background_list_done and
+        account.gmail_next_ref >= account.gmail_ref_count and account.gmail_in_flight == 0)
+    {
         account.gmail_threads_done = true;
         finishGmailSync(model, account);
         updateSyncStatus(model);
@@ -481,11 +526,12 @@ fn scheduleNextGmailDetail(model: *mail.Model, account_index: usize, fx: anytype
 
 fn scheduleNextGmailDraftDetail(model: *mail.Model, account_index: usize, fx: anytype, detail_response: anytype, authorized_detail_response: anytype) void {
     const account = &model.accounts[account_index];
-    while (account.gmail_draft_in_flight < gmail_draft_detail_concurrency and account.gmail_draft_next_ref < account.gmail_draft_ref_count) {
+    if (account.gmail_draft_in_flight == 0 and account.gmail_draft_next_ref < account.gmail_draft_ref_count) {
         const ref_index = account.gmail_draft_next_ref;
-        account.gmail_draft_next_ref += 1;
+        account.gmail_draft_next_ref += gmailBatchCount(account, ref_index, true);
         if (!scheduleGmailDetail(model, account_index, ref_index, true, fx, detail_response, authorized_detail_response)) {
-            account.error_message.set("A Gmail draft request could not be started.");
+            account.gmail_draft_next_ref = ref_index;
+            account.error_message.set("A Gmail draft batch could not be started.");
         }
     }
     if (account.gmail_draft_next_ref >= account.gmail_draft_ref_count and account.gmail_draft_in_flight == 0) {
@@ -496,18 +542,49 @@ fn scheduleNextGmailDraftDetail(model: *mail.Model, account_index: usize, fx: an
 }
 
 fn scheduleGmailDetail(model: *mail.Model, account_index: usize, ref_index: usize, is_draft: bool, fx: anytype, detail_response: anytype, authorized_detail_response: anytype) bool {
+    return scheduleGmailBatch(model, account_index, ref_index, is_draft, fx, detail_response, authorized_detail_response);
+}
+
+fn gmailBatchCount(account: *const mail.Account, ref_index: usize, is_draft: bool) usize {
+    const ref_count = if (is_draft) account.gmail_draft_ref_count else account.gmail_ref_count;
+    if (ref_index >= ref_count) return 0;
+    return @min(gmail_batch_size, ref_count - ref_index);
+}
+
+fn scheduleGmailBatch(model: *mail.Model, account_index: usize, ref_index: usize, is_draft: bool, fx: anytype, detail_response: anytype, authorized_detail_response: anytype) bool {
     const account = &model.accounts[account_index];
-    const reference = if (is_draft) &account.gmail_draft_refs[ref_index] else &account.gmail_refs[ref_index];
-    var url_buffer: [512]u8 = undefined;
-    const url = if (is_draft)
-        std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/drafts/{s}?format=full", .{ account.baseUrl(), reference.id.slice() }) catch return false
+    const count = gmailBatchCount(account, ref_index, is_draft);
+    if (count == 0) return false;
+    var boundary_buffer: [96]u8 = undefined;
+    const boundary = std.fmt.bufPrint(&boundary_buffer, "inbox_zero_{d}_{d}_{d}", .{ model.sync_generation, account_index, ref_index }) catch return false;
+    var content_type_buffer: [160]u8 = undefined;
+    const content_type = std.fmt.bufPrint(&content_type_buffer, "multipart/mixed; boundary={s}", .{boundary}) catch return false;
+    var body_buffer: [60 * 1024]u8 = undefined;
+    var body_len: usize = 0;
+    const refs = if (is_draft)
+        account.gmail_draft_refs[ref_index .. ref_index + count]
     else
-        std.fmt.bufPrint(&url_buffer, "{s}/gmail/v1/users/me/threads/{s}?{s}", .{ account.baseUrl(), reference.id.slice(), gmail_metadata_query }) catch return false;
-    const base = if (is_draft) gmail_draft_detail_key_base else gmail_detail_key_base;
-    const stride = if (is_draft) gmail_draft_detail_account_stride else gmail_detail_account_stride;
-    const key = model.sync_generation * generation_key_stride + base + @as(u64, @intCast(account_index)) * stride + ref_index;
-    if (!fetchAuthorized(fx, key, .GET, url, account, "", detail_response, authorized_detail_response)) return false;
-    if (is_draft) account.gmail_draft_in_flight += 1 else account.gmail_in_flight += 1;
+        account.gmail_refs[ref_index .. ref_index + count];
+    for (refs, 0..) |*reference, offset| {
+        const part = if (is_draft)
+            std.fmt.bufPrint(body_buffer[body_len..],
+                "--{s}\r\nContent-Type: application/http\r\nContent-ID: <draft-{d}>\r\n\r\nGET /gmail/v1/users/me/drafts/{s}?format=full HTTP/1.1\r\n\r\n",
+                .{ boundary, offset, reference.id.slice() },
+            ) catch return false
+        else
+            std.fmt.bufPrint(body_buffer[body_len..],
+                "--{s}\r\nContent-Type: application/http\r\nContent-ID: <thread-{d}>\r\n\r\nGET /gmail/v1/users/me/threads/{s}?{s} HTTP/1.1\r\n\r\n",
+                .{ boundary, offset, reference.id.slice(), gmail_metadata_query },
+            ) catch return false;
+        body_len += part.len;
+    }
+    const closing = std.fmt.bufPrint(body_buffer[body_len..], "--{s}--\r\n", .{boundary}) catch return false;
+    body_len += closing.len;
+    var url_buffer: [256]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buffer, "{s}/batch/gmail/v1", .{account.baseUrl()}) catch return false;
+    const key = model.sync_generation * generation_key_stride + gmail_detail_key_base + @as(u64, @intCast(account_index)) * gmail_detail_account_stride + ref_index;
+    if (!fetchAuthorizedTyped(fx, key, .POST, url, account, body_buffer[0..body_len], content_type, detail_response, authorized_detail_response)) return false;
+    if (is_draft) account.gmail_draft_in_flight += count else account.gmail_in_flight += count;
     return true;
 }
 
@@ -531,15 +608,73 @@ fn setGmailRequestFailure(account: *mail.Account, is_draft: bool, response: nati
     account.error_message.set(message);
 }
 
-fn parseGmailList(account: *mail.Account, body: []const u8) !void {
+fn parseGmailInboxList(account: *mail.Account, body: []const u8) !void {
     const parsed = try std.json.parseFromSlice(GmailThreadList, std.heap.page_allocator, body, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
     account.gmail_ref_count = 0;
     account.gmail_next_ref = 0;
     for (parsed.value.threads orelse &.{}) |reference| {
-        if (account.gmail_ref_count >= account.gmail_refs.len) break;
-        account.gmail_refs[account.gmail_ref_count].id.set(reference.id);
-        account.gmail_ref_count += 1;
+        appendGmailRef(account, reference.id);
+    }
+    account.gmail_inbox_list_done = true;
+    appendBackgroundGmailRefs(account);
+}
+
+fn parseGmailBackgroundList(account: *mail.Account, body: []const u8) !void {
+    const parsed = try std.json.parseFromSlice(GmailThreadList, std.heap.page_allocator, body, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    account.gmail_background_ref_count = 0;
+    for (parsed.value.threads orelse &.{}) |reference| {
+        if (account.gmail_background_ref_count >= account.gmail_background_refs.len) break;
+        account.gmail_background_refs[account.gmail_background_ref_count].id.set(reference.id);
+        account.gmail_background_ref_count += 1;
+    }
+    account.gmail_background_list_done = true;
+    appendBackgroundGmailRefs(account);
+}
+
+fn appendBackgroundGmailRefs(account: *mail.Account) void {
+    if (!account.gmail_inbox_list_done or !account.gmail_background_list_done) return;
+    for (account.gmail_background_refs[0..account.gmail_background_ref_count]) |*reference| {
+        appendGmailRef(account, reference.id.slice());
+    }
+}
+
+fn appendGmailRef(account: *mail.Account, id: []const u8) void {
+    for (account.gmail_refs[0..account.gmail_ref_count]) |*existing| {
+        if (std.mem.eql(u8, existing.id.slice(), id)) return;
+    }
+    if (account.gmail_ref_count >= account.gmail_refs.len) return;
+    account.gmail_refs[account.gmail_ref_count].id.set(id);
+    account.gmail_ref_count += 1;
+}
+
+fn parseGmailBatchResponse(model: *mail.Model, account_index: usize, body: []const u8, expected_count: usize, is_draft: bool) !void {
+    if (expected_count == 0 or body.len == 0) return error.InvalidBatchResponse;
+    const line_end = std.mem.indexOf(u8, body, "\r\n") orelse std.mem.indexOfScalar(u8, body, '\n') orelse return error.InvalidBatchResponse;
+    const delimiter = body[0..line_end];
+    if (!std.mem.startsWith(u8, delimiter, "--")) return error.InvalidBatchResponse;
+    var cursor = line_end;
+    for (0..expected_count) |_| {
+        const http_start = std.mem.indexOfPos(u8, body, cursor, "HTTP/1.1 ") orelse return error.InvalidBatchResponse;
+        if (http_start + 12 > body.len) return error.InvalidBatchResponse;
+        const status = std.fmt.parseInt(u16, body[http_start + 9 .. http_start + 12], 10) catch return error.InvalidBatchResponse;
+        const crlf_headers_end = std.mem.indexOfPos(u8, body, http_start, "\r\n\r\n");
+        const lf_headers_end = std.mem.indexOfPos(u8, body, http_start, "\n\n");
+        const json_start = if (crlf_headers_end) |position|
+            position + 4
+        else if (lf_headers_end) |position|
+            position + 2
+        else
+            return error.InvalidBatchResponse;
+        const next_boundary = std.mem.indexOfPos(u8, body, json_start, delimiter) orelse return error.InvalidBatchResponse;
+        if (status < 200 or status >= 300) return error.BatchPartFailed;
+        const json = std.mem.trim(u8, body[json_start..next_boundary], " \t\r\n");
+        if (is_draft)
+            try parseGmailDraft(model, account_index, json)
+        else
+            try parseGmailThread(model, account_index, json);
+        cursor = next_boundary + delimiter.len;
     }
 }
 
@@ -589,12 +724,23 @@ pub fn parseGmailThread(model: *mail.Model, account_index: usize, body: []const 
     defer parsed.deinit();
     if (parsed.value.messages.len == 0) return;
     const message = &parsed.value.messages[parsed.value.messages.len - 1];
+    try addGmailMessage(model, account_index, message, parsed.value.id, parsed.value.snippet orelse "");
+}
+
+pub fn parseGmailMessage(model: *mail.Model, account_index: usize, body: []const u8) !void {
+    const parsed = try std.json.parseFromSlice(GmailMessage, std.heap.page_allocator, body, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    try addGmailMessage(model, account_index, &parsed.value, parsed.value.threadId, "");
+}
+
+fn addGmailMessage(model: *mail.Model, account_index: usize, message: *const GmailMessage, provider_thread_id: []const u8, fallback_snippet: []const u8) !void {
+    if (account_index >= model.account_count) return error.AccountNotFound;
     var thread = mail.MailThread{ .account_index = account_index, .provider = .gmail };
-    thread.provider_thread_id.set(parsed.value.id);
+    thread.provider_thread_id.set(provider_thread_id);
     thread.provider_message_id.set(message.id);
     thread.rfc_message_id.set(headerValue(&message.payload, "Message-ID") orelse headerValue(&message.payload, "Message-Id") orelse "");
     thread.references.set(headerValue(&message.payload, "References") orelse "");
-    thread.snippet.set(message.snippet orelse parsed.value.snippet orelse "");
+    thread.snippet.set(message.snippet orelse fallback_snippet);
     thread.received_at.set(message.internalDate orelse "");
     thread.received_at_ms = parseGmailTimestamp(message.internalDate orelse "");
     thread.category.set(gmailCategory(message.labelIds));
@@ -825,10 +971,13 @@ fn updateSyncStatus(model: *mail.Model) void {
     if (loading) {
         model.status_message.set("Synchronizing Gmail and Outlook.");
     } else if (failed) {
+        model.pruneStaleThreads();
         model.status_message.set("Some accounts could not synchronize.");
     } else if (partial) {
+        model.pruneStaleThreads();
         model.status_message.set("Connected with partial mail results.");
     } else {
+        model.pruneStaleThreads();
         model.status_message.set("Gmail and Outlook are connected.");
     }
 }
@@ -978,13 +1127,91 @@ test "gmail inbox sync requests metadata instead of full thread bodies" {
     var found = false;
     for (0..fx.pendingFetchCount()) |index| {
         const request = fx.pendingFetchAt(index) orelse continue;
-        if (std.mem.indexOf(u8, request.url, "/threads/thread-large?") == null) continue;
+        if (!std.mem.endsWith(u8, request.url, "/batch/gmail/v1")) continue;
         found = true;
-        try std.testing.expect(std.mem.indexOf(u8, request.url, "format=metadata") != null);
-        try std.testing.expect(std.mem.indexOf(u8, request.url, "format=full") == null);
-        try std.testing.expect(std.mem.indexOf(u8, request.url, "metadataHeaders=Subject") != null);
+        try std.testing.expectEqual(std.http.Method.POST, request.method);
+        try std.testing.expect(std.mem.indexOf(u8, request.body, "/threads/thread-large?") != null);
+        try std.testing.expect(std.mem.indexOf(u8, request.body, "format=metadata") != null);
+        try std.testing.expect(std.mem.indexOf(u8, request.body, "format=full") == null);
+        try std.testing.expect(std.mem.indexOf(u8, request.body, "metadataHeaders=Subject") != null);
     }
     try std.testing.expect(found);
+}
+
+test "gmail sync prioritizes inbox refs before background refs" {
+    var model = mail.emptyModel();
+    model.addAccount(.gmail, "person@example.com", "Person", "token", "https://gmail.googleapis.com");
+    var fx = @import("main.zig").Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    startInitialSync(&model, &fx, @import("main.zig").Effects.responseMsg(.initial_response), @import("main.zig").Effects.hostMsg(.authorized_initial_response));
+
+    const background = native_sdk.EffectResponse{
+        .key = model.sync_generation * generation_key_stride + initial_key_base + gmail_background_list_folder_index * mail.max_accounts,
+        .outcome = .ok,
+        .status = 200,
+        .body = "{\"threads\":[{\"id\":\"archive-first\"},{\"id\":\"inbox-first\"}]}",
+    };
+    handleInitialResponse(&model, background, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
+    try std.testing.expectEqual(@as(usize, 0), model.accounts[0].gmail_ref_count);
+
+    const inbox = native_sdk.EffectResponse{
+        .key = model.sync_generation * generation_key_stride + initial_key_base + gmail_inbox_list_folder_index * mail.max_accounts,
+        .outcome = .ok,
+        .status = 200,
+        .body = "{\"threads\":[{\"id\":\"inbox-first\"}]}",
+    };
+    handleInitialResponse(&model, inbox, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
+    try std.testing.expectEqual(@as(usize, 2), model.accounts[0].gmail_ref_count);
+    try std.testing.expectEqualStrings("inbox-first", model.accounts[0].gmail_refs[0].id.slice());
+    try std.testing.expectEqualStrings("archive-first", model.accounts[0].gmail_refs[1].id.slice());
+}
+
+test "authorized Gmail metadata is fetched in one batch" {
+    const wire = @import("auth/wire.zig");
+    var model = mail.emptyModel();
+    _ = model.addAuthorizedAccount(.gmail, "provider-id", "person@example.com", "Person", "gmail:provider-id", "https://gmail.googleapis.com");
+    model.sync_generation = 1;
+    const account = &model.accounts[0];
+    account.sync_state = .loading;
+    account.gmail_inbox_list_done = true;
+    account.gmail_background_list_done = true;
+    account.gmail_drafts_done = true;
+    appendGmailRef(account, "message-one");
+    appendGmailRef(account, "message-two");
+    var fx = @import("main.zig").Effects.init(std.testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    scheduleNextGmailDetail(&model, 0, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
+    try std.testing.expectEqual(@as(usize, 1), fx.pendingHostCount());
+    const pending = fx.pendingHostAt(0) orelse return error.BatchRequestMissing;
+    const request = try wire.decodeRequest(pending.payload);
+    try std.testing.expectEqual(wire.Method.post, request.method);
+    try std.testing.expectEqualStrings("https://gmail.googleapis.com/batch/gmail/v1", request.url);
+    try std.testing.expect(std.mem.startsWith(u8, request.content_type, "multipart/mixed; boundary="));
+    try std.testing.expect(std.mem.indexOf(u8, request.body, "GET /gmail/v1/users/me/threads/message-one?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, request.body, "GET /gmail/v1/users/me/threads/message-two?") != null);
+    try std.testing.expectEqual(@as(usize, 2), account.gmail_in_flight);
+
+    const batch_body =
+        "--response_boundary\r\nContent-Type: application/http\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" ++
+        "{\"id\":\"message-one\",\"messages\":[{\"id\":\"message-one\",\"threadId\":\"thread-one\",\"labelIds\":[\"INBOX\",\"UNREAD\"],\"snippet\":\"First\",\"internalDate\":\"1000\",\"payload\":{\"headers\":[{\"name\":\"Subject\",\"value\":\"First message\"}]}}]}\r\n" ++
+        "--response_boundary\r\nContent-Type: application/http\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" ++
+        "{\"id\":\"message-two\",\"messages\":[{\"id\":\"message-two\",\"threadId\":\"thread-two\",\"labelIds\":[\"INBOX\"],\"snippet\":\"Second\",\"internalDate\":\"2000\",\"payload\":{\"headers\":[{\"name\":\"Subject\",\"value\":\"Second message\"}]}}]}\r\n" ++
+        "--response_boundary--\r\n";
+    handleGmailDetailResponse(&model, .{
+        .key = generation_key_stride + gmail_detail_key_base,
+        .outcome = .ok,
+        .status = 200,
+        .body = batch_body,
+    }, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
+
+    try std.testing.expectEqual(@as(usize, 0), account.gmail_in_flight);
+    try std.testing.expectEqual(@as(usize, 2), model.thread_count);
+    try std.testing.expectEqualStrings("First message", model.threads[0].subjectSlice());
+    try std.testing.expectEqualStrings("Second message", model.threads[1].subjectSlice());
+    try std.testing.expectEqual(.ready, account.sync_state);
 }
 
 test "gmail full body is fetched only for the opened message" {
@@ -1050,7 +1277,7 @@ test "stale sync responses are ignored after refresh" {
     try std.testing.expectEqual(.loading, model.accounts[0].sync_state);
 }
 
-test "gmail detail sync uses bounded concurrency and reaches ready" {
+test "gmail detail batch retries and reaches ready" {
     var model = mail.emptyModel();
     model.addAccount(.gmail, "person@example.com", "Person", "token", "https://gmail.googleapis.com");
     var fx = @import("main.zig").Effects.init(std.testing.allocator);
@@ -1074,28 +1301,42 @@ test "gmail detail sync uses bounded concurrency and reaches ready" {
     };
     threads.body = "{\"threads\":[{\"id\":\"t0\"},{\"id\":\"t1\"},{\"id\":\"t2\"},{\"id\":\"t3\"},{\"id\":\"t4\"}]}";
     handleInitialResponse(&model, threads, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
-    try std.testing.expectEqual(@as(usize, gmail_detail_concurrency), model.accounts[0].gmail_in_flight);
-    try std.testing.expectEqual(@as(usize, gmail_detail_concurrency), model.accounts[0].gmail_next_ref);
-
-    const detail_fixture =
-        \\{"id":"thread","messages":[{"id":"message","threadId":"thread","payload":{"headers":[]}}]}
-    ;
+    var background = native_sdk.EffectResponse{
+        .key = generation * generation_key_stride + initial_key_base + gmail_background_list_folder_index * mail.max_accounts,
+        .outcome = .ok,
+        .status = 200,
+    };
+    background.body = "{\"threads\":[]}";
+    handleInitialResponse(&model, background, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
+    try std.testing.expectEqual(@as(usize, 5), model.accounts[0].gmail_in_flight);
+    try std.testing.expectEqual(@as(usize, 5), model.accounts[0].gmail_next_ref);
     handleGmailDetailResponse(&model, .{
         .key = generation * generation_key_stride + gmail_detail_key_base,
         .outcome = .timed_out,
     }, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
     try std.testing.expectEqual(@as(u8, 1), model.accounts[0].gmail_retry_counts[0]);
     try std.testing.expect(model.accounts[0].error_message.isEmpty());
-    for (0..5) |ref_index| {
-        var detail = native_sdk.EffectResponse{
-            .key = generation * generation_key_stride + gmail_detail_key_base + ref_index,
-            .outcome = .ok,
-            .status = 200,
-        };
-        detail.body = detail_fixture;
-        handleGmailDetailResponse(&model, detail, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
+    try std.testing.expectEqual(@as(usize, 5), model.accounts[0].gmail_in_flight);
+
+    var batch_buffer: [8192]u8 = undefined;
+    var batch_len: usize = 0;
+    for (0..5) |index| {
+        const part = try std.fmt.bufPrint(batch_buffer[batch_len..],
+            "--test_response\r\nContent-Type: application/http\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{{\"id\":\"t{d}\",\"messages\":[{{\"id\":\"m{d}\",\"threadId\":\"t{d}\",\"labelIds\":[\"INBOX\"],\"payload\":{{\"headers\":[]}}}}]}}\r\n",
+            .{ index, index, index },
+        );
+        batch_len += part.len;
     }
+    const closing = try std.fmt.bufPrint(batch_buffer[batch_len..], "--test_response--\r\n", .{});
+    batch_len += closing.len;
+    handleGmailDetailResponse(&model, .{
+        .key = generation * generation_key_stride + gmail_detail_key_base,
+        .outcome = .ok,
+        .status = 200,
+        .body = batch_buffer[0..batch_len],
+    }, &fx, @import("main.zig").Effects.responseMsg(.gmail_detail_response), @import("main.zig").Effects.hostMsg(.authorized_gmail_detail_response));
     try std.testing.expectEqual(@as(usize, 0), model.accounts[0].gmail_in_flight);
+    try std.testing.expectEqual(@as(usize, 5), model.thread_count);
     try std.testing.expectEqual(.ready, model.accounts[0].sync_state);
 }
 
