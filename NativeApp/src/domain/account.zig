@@ -25,6 +25,13 @@ pub const Account = struct {
     sync_state: AccountSyncState = .idle,
     gmail_refs: [max_gmail_refs]GmailRef = [_]GmailRef{.{}} ** max_gmail_refs,
     gmail_ref_count: usize = 0,
+    // Gmail's broad thread listing can put sent/archive/trash ahead of inbox
+    // mail. Keep it aside until the inbox-scoped listing arrives so the first
+    // detail requests always produce rows for the view the user is looking at.
+    gmail_background_refs: [max_gmail_refs]GmailRef = [_]GmailRef{.{}} ** max_gmail_refs,
+    gmail_background_ref_count: usize = 0,
+    gmail_inbox_list_done: bool = false,
+    gmail_background_list_done: bool = false,
     gmail_next_ref: usize = 0,
     gmail_in_flight: usize = 0,
     gmail_retry_counts: [max_gmail_refs]u8 = [_]u8{0} ** max_gmail_refs,

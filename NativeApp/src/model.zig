@@ -917,6 +917,7 @@ pub const Model = struct {
 
     pub fn addThread(model: *Model, thread: MailThread) ?usize {
         var candidate = thread;
+        if (candidate.sync_generation == 0) candidate.sync_generation = model.sync_generation;
         if (!candidate.body.isEmpty()) candidate.body_loaded = true;
         if (!candidate.account_id.isValid() and candidate.account_index < model.account_count) {
             candidate.account_id = model.accounts[candidate.account_index].id;
@@ -930,8 +931,9 @@ pub const Model = struct {
                 // their own provider. Keep the newest message as the thread
                 // preview when a conversation appears more than once.
                 if (!existing.received_at.isEmpty() and !candidate.received_at.isEmpty() and
-                    std.mem.order(u8, existing.received_at.slice(), candidate.received_at.slice()) != .lt)
+                    std.mem.order(u8, existing.received_at.slice(), candidate.received_at.slice()) == .gt)
                 {
+                    existing.sync_generation = candidate.sync_generation;
                     return index;
                 }
                 const id = existing.id;
@@ -1254,13 +1256,43 @@ pub const Model = struct {
     pub fn resetForSync(model: *Model) u64 {
         model.sync_generation +%= 1;
         if (model.sync_generation == 0) model.sync_generation = 1;
-        model.thread_count = 0;
-        model.selected_thread = no_index;
-        model.reading_open = false;
-        model.open_windows = [_]MessageId{.{}} ** 3;
-        model.open_window_count = 0;
+        // Keep the last successful rows on screen while their replacements
+        // stream in. addThread upserts by stable provider/account identity, so
+        // the list refreshes in place instead of flashing empty for minutes.
         model.pending_mutations = [_]MutationSnapshot{.{}} ** 16;
         return model.sync_generation;
+    }
+
+    pub fn pruneStaleThreads(model: *Model) void {
+        if (model.sync_generation == 0) return;
+        const selected_id = if (model.selected_thread < model.thread_count) model.threads[model.selected_thread].id else MessageId{};
+        var write: usize = 0;
+        for (model.threads[0..model.thread_count]) |candidate| {
+            const account_index = model.accountIndexById(candidate.account_id) orelse candidate.account_index;
+            const account_ready = account_index < model.account_count and model.accounts[account_index].sync_state == .ready;
+            if (account_ready and candidate.sync_generation != model.sync_generation) continue;
+            model.threads[write] = candidate;
+            write += 1;
+        }
+        for (write..model.thread_count) |index| model.threads[index] = .{};
+        model.thread_count = write;
+
+        model.selected_thread = model.threadIndexById(selected_id) orelse no_index;
+        var open_write: usize = 0;
+        for (model.open_windows[0..model.open_window_count]) |message_id| {
+            if (model.threadIndexById(message_id) == null) continue;
+            model.open_windows[open_write] = message_id;
+            open_write += 1;
+        }
+        for (open_write..model.open_window_count) |index| model.open_windows[index] = .{};
+        model.open_window_count = open_write;
+        for (model.inbox_windows[0..model.inbox_window_count]) |*state| {
+            if (state.selected_thread_id.isValid() and model.threadIndexById(state.selected_thread_id) == null) {
+                state.selected_thread_id = .{};
+                state.reading = false;
+            }
+        }
+        model.reconcileSelection();
     }
 
     pub fn selected(model: *const Model) ?*const MailThread {
@@ -1606,7 +1638,7 @@ test "search and keyboard-style relative selection use visible rows" {
     try std.testing.expectEqual(@as(usize, 1), model.selected_thread);
 }
 
-test "refresh invalidates stale windows and mutations" {
+test "refresh preserves visible rows and windows while cancelling mutations" {
     var model = initialModel();
     var thread = MailThread{ .account_index = 0 };
     thread.provider_thread_id.set("refresh-me");
@@ -1616,9 +1648,32 @@ test "refresh invalidates stale windows and mutations" {
 
     const generation = model.resetForSync();
     try std.testing.expectEqual(@as(u64, 1), generation);
-    try std.testing.expectEqual(@as(usize, 0), model.thread_count);
-    try std.testing.expectEqual(@as(usize, 0), model.open_window_count);
+    try std.testing.expectEqual(@as(usize, 1), model.thread_count);
+    try std.testing.expectEqual(@as(usize, 1), model.open_window_count);
     try std.testing.expect(!model.pending_mutations[0].active);
+}
+
+test "completed refresh prunes unseen rows but keeps refreshed identities" {
+    var model = initialModel();
+    var stale = MailThread{ .account_index = 0 };
+    stale.provider_thread_id.set("stale");
+    stale.subject.set("Stale");
+    _ = model.addThread(stale);
+    var current = MailThread{ .account_index = 0 };
+    current.provider_thread_id.set("current");
+    current.subject.set("Before refresh");
+    const current_index = model.addThread(current).?;
+    const current_id = model.threads[current_index].id;
+
+    _ = model.resetForSync();
+    model.accounts[0].sync_state = .ready;
+    current.subject.set("After refresh");
+    _ = model.addThread(current);
+    model.pruneStaleThreads();
+
+    try std.testing.expectEqual(@as(usize, 1), model.thread_count);
+    try std.testing.expectEqual(current_id.value, model.threads[0].id.value);
+    try std.testing.expectEqualStrings("After refresh", model.threads[0].subjectSlice());
 }
 
 test "conversation aggregation keeps its newest message and window identity" {
