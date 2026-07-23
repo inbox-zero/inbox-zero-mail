@@ -359,8 +359,16 @@ struct ContentView: View {
                 .animation(.easeInOut(duration: 0.2), value: model.isThreadOpen)
             }
             .background(MailDesignTokens.background)
+
+            if model.isAssistantSidebarVisible {
+                Divider()
+                AssistantSidebarView(model: model)
+                    .frame(width: 420)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .animation(.easeInOut(duration: 0.2), value: model.isSidebarVisible)
+        .animation(.easeInOut(duration: 0.2), value: model.isAssistantSidebarVisible)
         .background(MailDesignTokens.background)
     }
 
@@ -377,8 +385,18 @@ struct ContentView: View {
                 .frame(minWidth: 360)
                 .navigationSplitViewColumnWidth(min: 360, ideal: 420, max: 520)
         } detail: {
-            ThreadDetailPane(model: model)
-                .frame(minWidth: 400)
+            HStack(spacing: 0) {
+                ThreadDetailPane(model: model)
+                    .frame(minWidth: 400)
+
+                if model.isAssistantSidebarVisible {
+                    Divider()
+                    AssistantSidebarView(model: model)
+                        .frame(width: 420)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: model.isAssistantSidebarVisible)
         }
         .navigationSplitViewStyle(.balanced)
         .background(MailDesignTokens.background)
@@ -404,6 +422,15 @@ struct ContentView: View {
                 }
                 .accessibilityIdentifier("toolbar-compose")
                 .help("Compose (C)")
+
+                Button {
+                    model.toggleAssistantSidebar()
+                } label: {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 13))
+                }
+                .accessibilityIdentifier("toolbar-assistant-sidebar")
+                .help("Toggle Assistant Sidebar (Cmd+Shift+\\)")
             }
         }
     }
@@ -589,6 +616,17 @@ private struct FocusTopBar: View {
                         }
                         .buttonStyle(.plain)
                         .help("Command Palette (Cmd+K)")
+
+                        Button {
+                            model.toggleAssistantSidebar()
+                        } label: {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 12))
+                                .foregroundStyle(MailDesignTokens.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("toolbar-assistant-sidebar")
+                        .help("Toggle Assistant Sidebar (Cmd+Shift+\\)")
                     }
                 }
             }
@@ -753,6 +791,29 @@ func commandPaletteBaseItems(model: WindowModel) -> [CommandPaletteItem] {
             shortcut: .init("b", modifiers: [.command], display: "⌘B", requiresEmptyQuery: false)
         ) {
             model.toggleSidebar()
+        },
+        makeCommandPaletteItem(
+            model: model,
+            id: "action-assistant-sidebar",
+            title: model.isAssistantSidebarVisible ? "Hide assistant" : "Show assistant",
+            subtitle: "Open the right sidebar for Agent or Terminal mode",
+            category: "Actions",
+            systemImage: "sparkles",
+            searchText: "assistant agent acp ai terminal right sidebar",
+            shortcut: .init("\\", modifiers: [.command, .shift], display: "⌘⇧\\", requiresEmptyQuery: false)
+        ) {
+            model.toggleAssistantSidebar()
+        },
+        makeCommandPaletteItem(
+            model: model,
+            id: "action-assistant-terminal",
+            title: "Open assistant terminal",
+            subtitle: "Switch the right sidebar to Terminal mode",
+            category: "Actions",
+            systemImage: "terminal",
+            searchText: "assistant terminal cli codex claude shell tui"
+        ) {
+            model.selectAssistantSidebarMode(.terminal)
         },
         makeCommandPaletteItem(
             model: model,
