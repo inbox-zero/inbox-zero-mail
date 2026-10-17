@@ -125,6 +125,66 @@ struct InboxZeroMailTests {
     }
 
     @Test
+    func debugACPRequestParsesLaunchArguments() {
+        let request = AppBootstrap.debugACPRequest(
+            arguments: [
+                "InboxZeroMail",
+                "--debug-acp-ask", "hi to ai",
+                "--debug-acp-agent", "/tmp/fake-acp-agent.py",
+                "--debug-acp-agent-arg", "--debug",
+                "--debug-acp-cwd", "/tmp",
+            ],
+            environment: [:]
+        )
+
+        #expect(request?.prompt == "hi to ai")
+        #expect(request?.agent.executable == "/tmp/fake-acp-agent.py")
+        #expect(request?.agent.arguments == ["--debug"])
+        #expect(request?.cwd.path == "/tmp")
+    }
+
+    @Test
+    func acpDebugServiceLogsDiscoveryAndPromptResponse() {
+        struct FakeACPClient: ACPClientProtocol {
+            func runOneShot(prompt: String) throws -> ACPRunResult {
+                #expect(prompt == "hi to ai")
+                return ACPRunResult(
+                    agentName: "Fake AI",
+                    agentVersion: "1.0",
+                    protocolVersion: 1,
+                    authMethodCount: 0,
+                    supportsProviderDiscovery: true,
+                    providers: [
+                        ACPProviderSummary(
+                            id: "main",
+                            isRequired: true,
+                            supportedProtocols: ["anthropic"],
+                            currentProtocol: "anthropic",
+                            currentBaseURL: "https://api.anthropic.com"
+                        ),
+                    ],
+                    currentModelID: "claude-sonnet-4",
+                    availableModels: [
+                        ACPModelSummary(id: "claude-sonnet-4", name: "Claude Sonnet 4", description: nil),
+                    ],
+                    responseText: "Hi from AI: hi to ai"
+                )
+            }
+        }
+
+        var lines: [String] = []
+        let service = ACPAgentService(client: FakeACPClient()) { lines.append($0) }
+
+        service.runDebugPrompt("hi to ai")
+
+        #expect(lines.contains("You: hi to ai"))
+        #expect(lines.contains("Agent: Fake AI 1.0"))
+        #expect(lines.contains(where: { $0.contains("Providers: main current=anthropic") }))
+        #expect(lines.contains(where: { $0.contains("Models: Claude Sonnet 4 (claude-sonnet-4, current)") }))
+        #expect(lines.contains("AI: Hi from AI: hi to ai"))
+    }
+
+    @Test
     @MainActor
     func commandPaletteDoesNotListSavedDrafts() async {
         let account = makeAccount(id: "gmail:drafts@example.com", email: "drafts@example.com", name: "Draft Tester")

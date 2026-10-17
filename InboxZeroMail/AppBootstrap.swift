@@ -38,6 +38,7 @@ struct AppBootstrap {
     let seedDemoData: Bool
     let autoConnectGmailOnLaunch: Bool
     let isUITesting: Bool
+    let debugACPRequest: DebugACPRequest?
 
     static var isRunningUITests: Bool {
         let processInfo = ProcessInfo.processInfo
@@ -126,7 +127,11 @@ struct AppBootstrap {
             isControlPlaneEnabled: isControlPlaneEnabled,
             seedDemoData: previewMode,
             autoConnectGmailOnLaunch: configuration.autoConnectGmailOnLaunch,
-            isUITesting: isUITesting
+            isUITesting: isUITesting,
+            debugACPRequest: debugACPRequest(
+                arguments: launchArguments,
+                environment: environment
+            )
         )
     }
 
@@ -284,11 +289,58 @@ struct AppBootstrap {
         )
     }
 
+    static func debugACPRequest(
+        arguments: [String],
+        environment: [String: String]
+    ) -> DebugACPRequest? {
+        let prompt = launchArgumentValue(named: "--debug-acp-ask", in: arguments)
+            ?? trimmedEnvironmentValue(for: "INBOX_ZERO_DEBUG_ACP_ASK", environment: environment)
+        guard let prompt = prompt?.trimmingCharacters(in: .whitespacesAndNewlines), prompt.isEmpty == false else {
+            return nil
+        }
+
+        let executable = launchArgumentValue(named: "--debug-acp-agent", in: arguments)
+            ?? trimmedEnvironmentValue(for: "INBOX_ZERO_DEBUG_ACP_AGENT", environment: environment)
+            ?? "claude-code-acp"
+        let agentArguments = launchArgumentValues(named: "--debug-acp-agent-arg", in: arguments)
+            + environmentArguments(environment["INBOX_ZERO_DEBUG_ACP_AGENT_ARGS"])
+        let cwdPath = launchArgumentValue(named: "--debug-acp-cwd", in: arguments)
+            ?? trimmedEnvironmentValue(for: "INBOX_ZERO_DEBUG_ACP_CWD", environment: environment)
+            ?? FileManager.default.currentDirectoryPath
+
+        return DebugACPRequest(
+            prompt: prompt,
+            agent: ACPAgentCommand(executable: executable, arguments: agentArguments),
+            cwd: URL(fileURLWithPath: cwdPath, isDirectory: true)
+        )
+    }
+
     private static func launchArgumentValue(named name: String, in arguments: [String]) -> String? {
         guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else {
             return nil
         }
         return arguments[index + 1]
+    }
+
+    private static func launchArgumentValues(named name: String, in arguments: [String]) -> [String] {
+        var values: [String] = []
+        var searchStart = arguments.startIndex
+        while searchStart < arguments.endIndex,
+              let index = arguments[searchStart...].firstIndex(of: name) {
+            let valueIndex = arguments.index(after: index)
+            guard valueIndex < arguments.endIndex else { break }
+            values.append(arguments[valueIndex])
+            searchStart = arguments.index(after: valueIndex)
+        }
+        return values
+    }
+
+    private static func environmentArguments(_ rawValue: String?) -> [String] {
+        rawValue?
+            .split(separator: " ")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
+            ?? []
     }
 
     private static func resolvedEndpointURL(
